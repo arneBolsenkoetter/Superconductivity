@@ -1,0 +1,64 @@
+\documentclass[%
+a4paper,
+reprint, %change to reprint for submission
+superscriptaddress,
+%groupedaddress,
+%unsortedaddress,
+%runinaddress,
+%frontmatterverbose, 
+%preprint,
+%preprintnumbers,
+%nofootinbib,
+%nobibnotes,
+%bibnotes,
+% amsmath,amssymb, %are imported using \usepackage in __preamble__
+aps,
+% pra,
+prb,
+%rmp,
+%prstab,
+%prstper,
+%floatfix,
+]{revtex4-2}
+
+\input{__preamble__}
+
+\begin{document}
+
+\preprint{SC/2025-09-18\_Bolsenkoetter} %optionally
+
+\title{Superconductivity\texorpdfstring{\\}{PDFstring}Measuring the Critical Temperature and Magnetic Field of Tin}
+
+
+\author{Arne Bolsenkötter}
+    \email{arne.bolsenkoetter@stud-mail.uni-weurzburg.de}
+    \affiliation{Physics Department, Julius-Maximilians-Universität Würzburg}
+
+\date{\today}
+
+\begin{abstract}
+\textcolor{red}{Hier muss dann noch das richtige Abstract stehen}
+\end{abstract}
+
+\maketitle
+
+% \experimentinfo{<date executed>}{<date submitted>}{<name supervisior>}[<optionally second submission date>][<optionally third submission date>]
+\metainfo{\fmtdate{2025}{09}{18}}{\today}{Dr.\ Martin Stehno}%[\fmtdate{2025}{09}{18}]%[\fmtdate{2025}{09}{25}]
+
+% \input{introduction}
+% \input{theory}
+% \input{setup}
+% \input{results}
+% \input{conclusion}
+
+\begin{acknowledgements}
+We thank our supervisor Dr.\ Martin Stehno for his great support and generosity.
+\end{acknowledgements}
+
+\appendix
+
+\nocite{*}  %include everything to test pipeline
+% \bibliographystyle{apsrev4-2}     % can be omitted, automatically used by REVTex 4-2
+\bibliography{__references__}
+
+\end{document}
