@@ -4,13 +4,17 @@ SC_Python/vendor/
 !SC_Python/vendor/ClebschGordon_Git_FPraktikum/
 !SC_Python/vendor/ClebschGordon_Git_FPraktikum/**
 
-# --- PyThon (project-wide) ---
+# --- venvs ---
 .venv/
+.sc_venv/
+
+# --- PyThon (project-wide) ---
 __pycache__/
 *.pyc
+*.py[cod]
 *.pyo
 *.pyd
-*.egg-info/
+*.so
 .ipynb_checkpoints/
 
 # --- macOS ---
@@ -21,8 +25,14 @@ __pycache__/
 # --- Altprotokoll ---
 Dusel_Karle_SC_passed.pdf
 
-# --- Latex: keep sour es and PDF but ignore build outputs ---
+# --- builds / packaging ---
 build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Latex: keep sour es and PDF but ignore build outputs ---
+sc_latex/build/
 *.aux
 *.bbl
 *.bcf

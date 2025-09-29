@@ -1,11 +1,26 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mySC"
 version = "0.1.0"
-requires-python = ">=3.10"
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+description = "F-Praktikum Superconductivity PyThon realisation"
+readme = "../README.md"
+requires-python = ">=3.11"
+authors = [{ name = Arne Bolsenkötter }]
+license = { text = "MIT" }
+dependencies = [ "numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7", "pandas>=2.0", ]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "black", "ipykernel"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["mySC*"]
-exclude = ["vendor*"]
+
+[project.scripts]
+sc-dataviewer = "mySC.Dataviewer:main"
