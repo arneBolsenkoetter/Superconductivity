@@ -1,3 +1,4 @@
-[submodule "SC_Python/vendor/ClebschGordon"]
+[submodule "sc_python/vendor/ClebschGordon"]
 	path = sc_python/vendor/ClebschGordon
 	url = git@github.com:ClebschGordon/F-Praktikum.git
+	ignore = untracked
