@@ -16,9 +16,6 @@ __pycache__/
 .vscode/
 .idea/
 
-# --- Altprotokoll ---
-Dusel_Karle_SC_passed.pdf
-
 # --- builds / packaging ---
 build/
 dist/
