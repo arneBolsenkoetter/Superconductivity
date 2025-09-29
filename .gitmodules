@@ -1,3 +1,3 @@
 [submodule "SC_Python/vendor/ClebschGordon"]
-	path = SC_Python/vendor/ClebschGordon
+	path = sc_python/vendor/ClebschGordon
 	url = git@github.com:ClebschGordon/F-Praktikum.git
