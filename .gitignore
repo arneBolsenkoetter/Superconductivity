@@ -1,3 +1,9 @@
+# --- Local Dirs ---
+SC-Data/
+SC_Python/vendor/
+!SC_Python/vendor/ClebschGordon_Git_FPraktikum/
+!SC_Python/vendor/ClebschGordon_Git_FPraktikum/**
+
 # --- PyThon (project-wide) ---
 .venv/
 __pycache__/
@@ -43,7 +49,3 @@ _minted*/
 *.snm
 *.vrb
 
-SC-Data/
-SC_Python/vendor/
-!SC_Python/vendor/ClebschGordon_Git_FPraktikum/
-!SC_Python/vendor/ClebschGordon_Git_FPraktikum/**
