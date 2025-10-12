@@ -26,7 +26,7 @@ DruckVolt = [
     (158.0, 'V', 0.151024, np.nan),
     (143.0, 'V', 0.13,      1.0e-2),
     (126.0, 'V', 0.121080, np.nan),
-    (107.0, 'V',    0.102849, np.nan),
+    (107.0, 'V', 0.102849, np.nan),
     (93.0,  'mV',   90.0769,   np.nan),
     (74.0,  'mV',   71.5692,   np.nan),
     (66.0,  'mV',   63.4452,   np.nan),
@@ -70,9 +70,7 @@ def DC_Kenndaten(wqr:str) -> tuple[float,float]:
         return (1.0*0.000040, 0.000007)
     raise ValueError("DC_Kennlinie() erwartet str {'mv' | 'V'}")
 
-def format_structured(
-    arr, order=None, floatfmt=".6g", max_rows=None
-):
+def format_structured(arr, order=None, floatfmt=".6g", max_rows=None):
     """
         Return a pretty, column-aligned string of a structured array.
     """
@@ -153,7 +151,7 @@ def fill_errs(x:np.ndarray):
 
     def err_mV(x):
         """ 0.005%=5.0e-5 of reading  +  0.0035%=3.5e-5 of range (100mV=0.1V) """
-        return 5.0e-6*x['volts']+3.5e-6
+        return 5.0e-5*x['volts']+3.5e-6
 
     def err_V(x):
         """ 0.004%=4.0e-5 of reading  +  0.0007%=7.0e-6 of range (1V) """
@@ -165,7 +163,7 @@ def fill_errs(x:np.ndarray):
     x['volts_err'][m2] = err_V(x[m2])
 
 def get_druck_errs(x: np.ndarray) -> np.ndarray:
-    return x['druck']*0.03+1
+    return np.sqrt((x['druck']*0.03)**2+1)
 
 def druck_si(x:np.ndarray) -> np.ndarray:
     m_mbar = (x['druck_unit']=='mbar')
@@ -245,7 +243,7 @@ npDV_full_all_fields    = rfn.append_fields(
 npDV_full               = npDV_full_all_fields[
     ['volts_unit','volts','volts_err','druck_unit','druck','druck_err',]
 ]
-npDV_si=npDV_full.copy()
+npDV_si                 = npDV_full.copy()
 npDV_si                 = druck_si(npDV_si)
 
 __all__ = [

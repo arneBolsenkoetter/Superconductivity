@@ -1,100 +1,75 @@
 % --- From RevTeX 4.2 Template ---
-%\usepackage[mathlines]{lineno}% Enable numbering of text and display math
-%\linenumbers\relax % Commence numbering lines
+% \usepackage[mathlines]{lineno}    % Enable numbering of text and display math
+% \linenumbers\relax    % Commence numbering lines
 
-%\usepackage[showframe,%Uncomment any one of the following lines to test 
-%%scale=0.7, marginratio={1:1, 2:3}, ignoreall,% default settings
-%%text={7in,10in},centering,
-%%margin=1.5in,
-%%total={6.5in,8.75in}, top=1.2in, left=0.9in, includefoot,
-%%height=10in,a5paper,hmargin={3cm,0.8in},
-%]{geometry}
-
+% \usepackage[showframe,    %Uncomment any one of the following lines to test 
+% %scale=0.7, marginratio={1:1, 2:3}, ignoreall,    % default settings
+% %text={7in,10in},centering,
+% %margin=1.5in,
+% %total={6.5in,8.75in}, top=1.2in, left=0.9in, includefoot,
+% %height=10in,a5paper,hmargin={3cm,0.8in},
+% ]{geometry}   % conflicts with RevTex
+\input{__preamble_mpl__.tex}
 
 % --- Language & Fonts ---
-\usepackage[english]{babel}
-\usepackage{lmodern}
-
+\usepackage[english,ngerman]{babel}
 % \usepackage[utf8]{inputenc} %redundant with modern LaTeX (UTF-8 is default)
-
-
-% --- Mathematik & Symbole ---
-\usepackage{amsmath,amssymb,mathtools}
-
-% \usepackage{physics} %use with caution, redifines many commands
-
 
 % --- Layout & Formatierung ---
 \usepackage{graphicx}
-\usepackage{dcolumn}% Align table columns on decimal point
-\usepackage{bm}% bold math
+\graphicspath{{../figures/final}}
+\usepackage{dcolumn}    % Align table columns on decimal point
 \usepackage[caption=false]{subfig}
-
-% \usepackage[small, bf, up, hang]{caption} %conflicts with REVTex
-% \usepackage{subcaption} %conflicts with REVTex
-% \usepackage{float} %unnecessary
-% \usepackage{geometry} %conflicts with REVTex
+% \usepackage[small, bf, up, hang]{caption}   %conflicts with REVTex
+% \usepackage{subcaption}   %conflicts with REVTex
+% \usepackage{float}    %unnecessary
+% \usepackage{geometry}   %conflicts with REVTex
 % \geometry{left=1.8cm, right=1.8cm, top=2.0cm, bottom=2.0cm}
 
-
-% --- Literature & Citation \\ superfluous, gets handeled by REVTex ---
+% % --- Literature & Citation \\ superfluous, gets handeled by REVTex ---
 % \usepackage[numbers,sort&compress]{natbib}
 % \usepackage{natbib} %already loaded and configured by REVTex
 % \usepackage{csquotes} %conflicts with REVTex
 
-
-% --- Abschnittsformatierung \\ superfluous, handled by REVTex ---
+% % --- Abschnittsformatierung \\ superfluous, handled by REVTex ---
 % \usepackage{titlesec}
 % \titleformat{\section}
 %   {\large\bfseries}{\thesection}{1em}{}
 % \titleformat{\subsection}
 %   {\normalsize\bfseries}{\thesubsection}{1em}{}
 
+% % --- Mathematik & Symbole ---
+% \usepackage{amsmath,amssymb,mathtools}    % outsourced to __preamble_mpl__.tex
+% \usepackage{physics} %use with caution, redifines many commands
 
 % --- Manual added packages ---
-\usepackage{soul,xcolor} %needed for custom \stc[<strike colour>]{<text>}
 \usepackage{comment}
 \usepackage{xparse} %for \metainfo
 
-
 % --- Colours & Links ---
 \usepackage{hyperref} %best practice is to \use hyperref last
-% \hypersetup{
-%     colorlinks=true,
+\hypersetup{
+    colorlinks=true,
+    allcolors=blue,
 %     linkcolor=black,
 %     citecolor=black,
-%     urlcolor=black}
+%     urlcolor=black
+}
+\usepackage[nameinlink,capitalise]{cleveref}
 
+% ------------------------------ Global setup ---------------------------------
+\setlength\belowcaptionskip{0.2em} 
+\captionsetup{justification=raggedright,singlelinecheck=false} 
+\sisetup{separate-uncertainty=true, per-mode=symbol, detect-all}
 
-% --- Manual Macros & Helpers ---
+% ------------------------- Manual Macros & Helpers ---------------------------
 \newcommand{\cor}[1]{\textcolor{red}{#1}}
 \newcommand{\cog}[1]{\textcolor{green}{#1}}
 \newcommand{\coo}[1]{\textcolor{orange}{#1}}
 \newcommand{\cob}[1]{\textcolor{blue}{#1}}
 \newcommand{\coc}[1]{\textcolor{cyan}{#1}}
 \newcommand{\coteal}[1]{\textcolor{teal}{#1}}
-\newcommand{\degree}{^\circ}
-
-
-% \stc is OUTDATED! use \strike instead
-% \newcommand{\stc}[2][red]{
-%   {\setstcolor{#1}\st{#2}}
-% } % \stc[<line color>]{<text>}
-
-\newcommand{\strike}[2][\relax]{%
-  \begingroup
-    \ifx#1\relax
-      % No color given → copy current text color into a temp color name
-      \colorlet{stcCurrent}{.}%
-      \setstcolor{stcCurrent}%
-    \else
-      % Color given → use that for the strike line only
-      \setstcolor{#1}%
-    \fi
-    \st{#2}%
-  \endgroup
-}
-
+% \newcommand{\degree}{^\circ}    % outsourced to __preamble_mpl__.tex
 % formats date to match "\today":
 \newcommand{\fmtdate}[3]{%
   \begingroup
@@ -102,7 +77,6 @@
   \today
   \endgroup
 }
-
 % usage: \metainfo{<date executed>}{<date submitted>}{<name supervisior>}[<optional second submission date>][<optional third submission date>]
 \NewDocumentCommand{\metainfo}{ m m m o o }{%
   \begingroup
@@ -121,3 +95,17 @@
   \twocolumngrid
   \endgroup
 }
+\newcommand{\Tin}{\ensuremath{\mathrm{Sn}}} 
+\newcommand{\Hc}{\ensuremath{H_{\mathrm c}}} 
+\newcommand{\Tc}{\ensuremath{T_{\mathrm c}}} 
+\newcommand{\HcZero}{\ensuremath{H_{\mathrm c}(0)}} 
+\newcommand{\Uab}{\ensuremath{U_{!\mathrm{AB}}}} 
+\newcommand{\Up}{\ensuremath{U_{!p}}} 
+\newcommand{\Icoil}{\ensuremath{I_{\mathrm{coil}}}} 
+\newcommand{\Bcoil}{\ensuremath{B_{\mathrm{coil}}}} 
+\newcommand{\kB}{\ensuremath{k_{\mathrm B}}} 
+\newcommand{\muZero}{\ensuremath{\mu_0}} 
+\newcommand{\chiM}{\ensuremath{\chi}} 
+\newcommand{\lambdaL}{\ensuremath{\lambda_{!L}}} 
+\newcommand{\xiGL}{\ensuremath{\xi_{!\mathrm{GL}}}}
+\selectlanguage{ngerman}

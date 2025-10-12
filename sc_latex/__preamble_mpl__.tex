@@ -1,0 +1,37 @@
+% ~/path/to/Superconductivity/sc_latex/__preamble_mpl__.tex
+
+% --- Fonts ---
+% \usepackage{newtxtext,newtxmath}    % use either,
+\usepackage{lmodern}                % or            never both
+
+% --- math & symbols ---
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{bm}% bold math
+
+% --- Units (siunitx v3) ---
+\usepackage{siunitx}
+\sisetup{
+  per-mode=symbol,
+  detect-all,
+  exponent-product=\cdot,
+  separate-uncertainty = true,
+  retain-zero-exponent = true
+}
+
+% ------------------------- Manual Macros & Helpers ---------------------------
+\usepackage{soul,xcolor} %needed for custom \stc[<strike colour>]{<text>}
+
+\newcommand{\degree}{^\circ}
+\newcommand{\strike}[2][\relax]{%
+  \begingroup
+    \ifx#1\relax
+      % No color given → copy current text color into a temp color name
+      \colorlet{stcCurrent}{.}%
+      \setstcolor{stcCurrent}%
+    \else
+      % Color given → use that for the strike line only
+      \setstcolor{#1}%
+    \fi
+    \st{#2}%
+  \endgroup
+}

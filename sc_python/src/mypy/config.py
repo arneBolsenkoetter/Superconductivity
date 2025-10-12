@@ -1,12 +1,41 @@
 # ~/path/to/Superconductivity/sc_python/src/mySC/config.py
 
+# This file tries to condense all relevant parameters to make matplotlib (mpl) figures stylised as demanded in scientific publishings, like the size of a figure (see figrect()), the individual mpl.rcParams (see mpl_rc) and provides a way how to easily initialise the im another script (see configure()).
+# There are even more advanced collections out there. I found one at: https://github.com/hosilva/physrev_mplstyle/blob/main/physrev.mplstyle
+
+# Furthermore, it introduces a solution which hands-off the comilation of text in mpl.plot to LaTeX (see export_final). In order to do so in-line with the rest of the document, it uses a minimal preamble_mpl.tex to draw its settings from, which can be shared with the main preamble.tex (at the very start of preamble.tex: \input(preamble_mpl.tex)).
+
+# Last but not lest this document defines a 'breaker' which allows you to set breakpoints manually in python-scripts (see breaker()).
+
+
 # --------------------------------- imports -----------------------------------
-from __future__ import annotations
-# always first
+from __future__ import annotations  # always first
+
+import os, atexit, sys
 
 import numpy as np
 
 from pathlib import Path
+
+
+# --------------------------------- breaker -----------------------------------
+def confirm(msg="Continue?", default=False):
+    """
+        Returns True to continue, False to abort.
+        - default applies if stdin isn't a TTY (e.g., piped) or user just hits Enter.
+
+        Usage:
+        if not confirm("Proceed with the next step?"):
+            sys.exit(0)  # graceful exit
+    """
+    if not sys.stdin.isatty():
+        return default
+    try:
+        ans = input(f"{msg} [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()  # clean newline
+        return False
+    return ans in ("y", "yes")
 
 
 # ---------------------------- Project Locations ------------------------------
@@ -15,9 +44,10 @@ from pathlib import Path
 config_path     = Path(__file__).resolve()  
 PROJECT_ROOT    = config_path.parents[3]
 FIG_DIR         = PROJECT_ROOT / 'figures'
+FIG_FINAL       = PROJECT_ROOT / 'figures' / 'final'
 PY_DIR          = PROJECT_ROOT / 'sc_python'
-PY_SRC          = PROJECT_ROOT / 'sc_python' / 'src'
-PY_SRC_MYPY     = PROJECT_ROOT / 'sc_python' / 'src' / 'mypy'
+SRC             = PROJECT_ROOT / 'sc_python' / 'src'
+MYPY            = PROJECT_ROOT / 'sc_python' / 'src' / 'mypy'
 DATA_DIR        = PROJECT_ROOT / 'sc_data'
 LATEX_DIR       = PROJECT_ROOT / 'sc_latex'
 
@@ -35,47 +65,8 @@ qe      = 1.602176634e-19
 figwidth = 3.375    # review letter syle column width - in inches!
 figheight = 0.75*figwidth
 figrect_norm=(figwidth,figheight)
-SCATTER_KW = dict(s=1, alpha=0.65, linewidths=0, edgecolors='none', rasterized=True)
 
-mpl_rc: dict[str,object] = {
-    'axes.axisbelow':       True,
-    'axes.grid':            True,
-    'axes.grid.axis':       'both',
-    "axes.labelsize":       8,
-    "axes.titlesize":       8,
-    "axes.linewidth":       0.6,
-
-    'grid.alpha':           0.6,
-    'grid.linewidth':       0.4,
-
-    "font.size":            8,
-    "legend.fontsize":      7,
-
-    "xtick.direction":      "in",
-    "xtick.labelsize":      7,
-    "xtick.major.size":     3,
-    "xtick.major.width":    0.6,
-    "xtick.minor.size":     1.5,
-    "xtick.minor.width":    0.5,
-    'xtick.top':            True,
-
-    "ytick.direction":      "in",
-    "ytick.labelsize":      7,
-    "ytick.major.size":     3,
-    "ytick.major.width":    0.6,
-    "ytick.minor.size":     1.5,
-    "ytick.minor.width":    0.5,
-    "ytick.right":          True,
-
-    'text.usetex':          True,
-    "mathtext.fontset":     "stix",     # serif-like math without LaTeX dependency
-    "font.family":          "serif",
-
-    'figure.dpi':           200,
-    "savefig.dpi":          300,
-}
-
-def figrect(m:int=1,n:int=1,sw:float=1.0,sh:float=1.0) -> tuple[float,float]:
+def figrect(ncols:int|None=1, nrows:int|None=1, sw:float|None=1.0, sh:float|None=1.0) -> tuple[float,float]:
     """
         Returns a tuple with the size (width,height) for a matplotlib.pyplot (plt) subplots-figure.
 
@@ -85,27 +76,167 @@ def figrect(m:int=1,n:int=1,sw:float=1.0,sh:float=1.0) -> tuple[float,float]:
         - sw:   float,  abbreviation for 'Sqeeze Width'. Stretches of thwats the figure-width by the set value;
         - sh:   float,  abbreviation for 'Squeeze Height', Stretches or thwats the figure_height by set value;
 
-        Return:
+        Returns:
         - (fig-width, fig-height):  tuple[float,float], size for a scientific-review-paper-styled image, in INCHES!
     """
-    return (figwidth*m*sw,figheight*n*sh)
+    return (figwidth*ncols*sw, figheight*nrows*sh)
 
-def config_plot(overrides:dict[str,object]|None=None, backend:str|None=None) -> None:
+def configure(overrides:dict[str,object]|None=None, final:bool|None=None, backend:str|None=None) -> None:
     """
-        Set files matplotlib settings to the physical review letters "scientific" standard
+        Apply standardised rcParams (config.mpl_rc); allows to override the standard rcParams locally for executing script via overrides; 
+        if config.export_final == True, or config.configure(final=True)     -> merge-in LaTeX/PGF extras.
 
         Usage:
+            - import:
+                import config (as cfg)
+
             - default:
-                import config
-                config.config_plot()    or      config.use_mpl
-            - optional with tweaks:
-                config.config_plot({'axes.grid': False})
+                at the very top (just after imports) of each script that plots graphs using matplotlib(.pyplot), you want to aply the standardised mpl rcParams to
+                call:   config.configure()
+            - overrides:
+                If you want to make local (bound to the current script) changes,
+                call:   config.configure(overrides={'lines.linewidth':0.5})     <- exemplary
+            - final:
+                for finalised plots, hand compilation off to LaTeX via:     'text.usetex':True
+                first set:  config.export_final=True,
+                AFTER that: config.configure( (overrides=...) )
+
+                alternatively (no config.export_final=True in script):
+                call:       config.configure(final=True)
     """
     import matplotlib as mpl
     if backend is not None:
-        mpl.use(backend,force=True)
-    rc = mpl_rc if overrides is None else {**mpl_rc, **overrides}
+        mpl.use(backend, force=True)
+    use_final = export_final if final is None else final
+    rc = dict(mpl_rc_base)
+    if use_final:
+        rc.update(mpl_rc_final)
+    if overrides:
+        rc.update(overrides)
     mpl.rcParams.update(rc)
+    global errorbar_linewidth
+    errorbar_linewidth = max(rc['lines.linewidth']-0.2,0.1)
 
-# Optional ultra-short alias    -   without optional overrides
-use_mpl = config_plot
+def err_kw():
+    """
+        usage:
+        import config as cfg
+        ...
+        ax.errorbar(x, y, yerr=dy, **cfg.eb_kw(), capsize=2)
+    """
+    capsize=mpl_rc.get('errorbar.cabsize',2)
+    return dict(elinewidth=errorbar_linewidth, capthick=errorbar_linewidth, capsize=capsize)
+
+def savefig(fig, name:str, ext:str='pdf', final:bool|None=None, **kwargs) -> Path:
+    """Save with (or without) final LaTeX settings, independent of global state."""
+    import matplotlib as mpl
+    name_path = Path(name)
+    ext_norm = str(ext).lower().lstrip('.')
+    if name_path.suffix:
+        stem = name_path.stem
+        use_ext = ext_norm if ext_norm else name_path.suffix.lstrip(".")
+    else:
+        stem = name_path.as_posix()
+        use_ext = ext_norm or "pdf"
+    use_final = export_final if final is None else final
+    directory = FIG_FINAL if use_final else FIG_DIR
+    suffix = '_final' if use_final else ''
+    destination = (directory / f"{stem}{suffix}.{use_ext}").resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if use_final:
+        with mpl.rc_context(mpl_rc_final):
+            fig.savefig(destination, **kwargs)
+    else:
+        fig.savefig(destination, **kwargs)
+    print(f'Saved as {destination}')
+    return destination
+
+
+SCATTER_KW = dict(s=1, alpha=0.65, linewidths=0, edgecolors='face', rasterized=True)
+
+mpl_rc: dict[str,object] = {
+    'axes.axisbelow':       True,
+    'axes.grid':            True,
+    'axes.grid.axis':       'both',
+    "axes.labelsize":       8,
+    "axes.titlesize":       8,
+    "axes.linewidth":       0.6,
+
+    "errorbar.capsize":     2,
+
+    "figure.constrained_layout.use":    True,
+    'figure.dpi':           200,
+    "font.family":          "serif",
+    "font.size":            8,
+
+    'grid.alpha':           0.6,
+    'grid.linewidth':       0.4,
+
+    "legend.fontsize":      7,
+    "lines.linewidth":      0.8,
+    "lines.markersize":     2,
+
+    "mathtext.fontset":     "stix",     # serif-like math without LaTeX dependency
+
+    "patch.linewidth":      0.6,
+
+    "savefig.dpi":          300,
+    "scatter.marker":       'o',
+    "svg.fonttype":         'none',
+
+    "xtick.bottom":         True,
+    "xtick.direction":      "in",
+    "xtick.labelsize":      7,
+    "xtick.major.size":     3,
+    "xtick.major.width":    0.6,
+    "xtick.minor.bottom":   True,
+    "xtick.minor.size":     1.5,
+    "xtick.minor.top":      True,
+    "xtick.minor.visible":  True,
+    "xtick.minor.width":    0.5,
+    'xtick.top':            True,
+
+    "ytick.direction":      "in",
+    "ytick.labelsize":      7,
+    "ytick.left":           True,
+    "ytick.major.size":     3,
+    "ytick.major.width":    0.6,
+    "ytick.minor.left":     True,
+    "ytick.minor.right":    True,
+    "ytick.minor.size":     1.5,
+    "ytick.minor.visible":  True,
+    "ytick.minor.width":    0.5,
+    "ytick.right":          True,
+#   1   2   3   4   5   6   7   8
+}
+errorbar_linewidth = max(mpl_rc['lines.linewidth']-0.2,0.1)
+
+
+# --------------------------- Final-export toggle -----------------------------
+# outsources text compilations in plots to TeX
+export_final:bool = bool(int(os.getenv("SC_EXPORT_FINAL", "0")))  # or set cfg.export_final=True in script
+
+# TeX compilation needs instructions->preamble. Optional: keep your LaTeX preamble in a file in your LaTeX project
+LATEX_PREAMBLE_FILE = LATEX_DIR / "__preamble_mpl__.tex"
+DEFAULT_PREAMBLE = r"\usepackage{amsmath}\usepackage{siunitx}\usepackage{newtxtext,newtxmath}"
+def _load_preamble() -> str:
+    try:
+        return LATEX_PREAMBLE_FILE.read_text()
+    except Exception:
+        return DEFAULT_PREAMBLE
+
+# Your existing base rc (rename your current mpl_rc to mpl_rc_base)
+mpl_rc_base = mpl_rc
+# Extra settings only for final exports
+mpl_rc_final = {
+    "text.usetex": True,
+    "text.latex.preamble": _load_preamble(),
+    "pgf.texsystem": "lualatex",   # works well with unicode + modern fonts
+    "svg.fonttype": "none",        # selectable text in SVGs
+}
+
+@atexit.register
+def _reset_export_flag():
+    # Prevent “sticking” when working interactively
+    global export_final
+    export_final = False
