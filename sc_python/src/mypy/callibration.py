@@ -112,17 +112,6 @@ m_err, b_err = np.sqrt(np.diag(cov))
 
 print_cov = False
 if print_cov:
-    # printing nice terminal outputs:
-    # left / right / centered alignment with fixed widths
-    # print(f"{name:<18} | {value:>8.3f} | {status:^6}")
-    #               ^ left        ^ right, width 8, 3 decimals  ^ center, width 6
-
-    # custom fill characters
-    # print(f"{'Header':=^18}")   # =====Header=====
-
-    # # dynamic widths
-    # w = 12
-    # print(f"{name:<{w}} | {value:>{w}.2f}")
     label_w, val_w = 6, 24
     print('')
     print(f"{'var_m':<{label_w}}= {var_m:>{val_w}}{'':^8}"f"{'σ_m ':>{label_w}}= {np.sqrt(var_m):>{val_w}}")

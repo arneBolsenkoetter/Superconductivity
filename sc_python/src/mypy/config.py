@@ -11,7 +11,7 @@
 # --------------------------------- imports -----------------------------------
 from __future__ import annotations  # always first
 
-import os, atexit, sys
+import os, atexit, sys, re
 
 import numpy as np
 
@@ -37,6 +37,15 @@ def confirm(msg="Continue?", default=False):
         return False
     return ans in ("y", "yes")
 
+def prRed(s): print("\033[91m {}\033[00m".format(s))
+def prGreen(s): print("\033[92m {}\033[00m".format(s))
+def prYellow(s): print("\033[93m {}\033[00m".format(s))
+def prLightPurple(s): print("\033[94m {}\033[00m".format(s))
+def prPurple(s): print("\033[95m {}\033[00m".format(s))
+def prCyan(s): print("\033[96m {}\033[00m".format(s))
+def prLightGray(s): print("\033[97m {}\033[00m".format(s))
+def prBlack(s): print("\033[90m {}\033[00m".format(s))
+
 
 # ---------------------------- Project Locations ------------------------------
 # directory MUST be sctructured like: 
@@ -49,6 +58,7 @@ PY_DIR          = PROJECT_ROOT / 'sc_python'
 SRC             = PROJECT_ROOT / 'sc_python' / 'src'
 MYPY            = PROJECT_ROOT / 'sc_python' / 'src' / 'mypy'
 DATA_DIR        = PROJECT_ROOT / 'sc_data'
+DATA_CLEAN      = PROJECT_ROOT / 'sc_data' / 'clean'
 LATEX_DIR       = PROJECT_ROOT / 'sc_latex'
 
 
@@ -117,39 +127,57 @@ def configure(overrides:dict[str,object]|None=None, final:bool|None=None, backen
     global errorbar_linewidth
     errorbar_linewidth = max(rc['lines.linewidth']-0.2,0.1)
 
-def err_kw():
+def err_kw(elw:float|None=None,capsz:float|None=None):#-> dict[str,float]:
     """
         usage:
         import config as cfg
         ...
         ax.errorbar(x, y, yerr=dy, **cfg.eb_kw(), capsize=2)
     """
-    capsize=mpl_rc.get('errorbar.cabsize',2)
-    return dict(elinewidth=errorbar_linewidth, capthick=errorbar_linewidth, capsize=capsize)
+    import matplotlib as mpl
+    if elw is None:
+        elw=max(mpl_rc.get('lines.linewidth',0.8)-0.2,0.1)
+    else:
+        elw=elw
+    if capsz is None:
+        capsize=mpl_rc.get('errorbar.capsize',2)
+    else:
+        capsize=capsz
+    return dict(elinewidth=elw, capthick=elw, capsize=capsize)
 
 def savefig(fig, name:str, ext:str='pdf', final:bool|None=None, **kwargs) -> Path:
     """Save with (or without) final LaTeX settings, independent of global state."""
     import matplotlib as mpl
     name_path = Path(name)
+    print(name_path)
     ext_norm = str(ext).lower().lstrip('.')
+    print(ext_norm)
     if name_path.suffix:
         stem = name_path.stem
+        print(stem)
         use_ext = ext_norm if ext_norm else name_path.suffix.lstrip(".")
+        print(use_ext)
     else:
         stem = name_path.as_posix()
+        print(stem)
         use_ext = ext_norm or "pdf"
+        print(use_ext)
     use_final = export_final if final is None else final
     directory = FIG_FINAL if use_final else FIG_DIR
     suffix = '_final' if use_final else ''
     destination = (directory / f"{stem}{suffix}.{use_ext}").resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    destination_userstripped=re.sub('/Users/arnebolsenkoetter','~',str(destination))
     if use_final:
         with mpl.rc_context(mpl_rc_final):
             fig.savefig(destination, **kwargs)
     else:
         fig.savefig(destination, **kwargs)
-    print(f'Saved as {destination}')
+    print(f'Saved as {destination_userstripped}')
     return destination
+
+def user_stripped(path:Path) -> str:
+    return re.sub('/Users/arnebolsenkoetter','~',str(path))
 
 
 SCATTER_KW = dict(s=1, alpha=0.65, linewidths=0, edgecolors='face', rasterized=True)
@@ -161,11 +189,14 @@ mpl_rc: dict[str,object] = {
     "axes.labelsize":       8,
     "axes.titlesize":       8,
     "axes.linewidth":       0.6,
+    "axes.formatter.useoffset":     True,
+    "axes.formatter.use_mathtext":  True,
+    "axes.formatter.limits":        (0,0),
 
     "errorbar.capsize":     2,
 
     "figure.constrained_layout.use":    True,
-    'figure.dpi':           200,
+    'figure.dpi':           300,
     "font.family":          "serif",
     "font.size":            8,
 

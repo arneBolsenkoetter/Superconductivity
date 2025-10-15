@@ -22,7 +22,7 @@ RENAMES = {
 DTYPE = np.dtype([(RENAMES[c], "f8") for c in DEFAULT_COLS])
 
 
-#  
+ 
 @dataclass(frozen=True)
 class Measurement:
     """Container for one LHJG Supraleitung .dat file."""
@@ -298,9 +298,40 @@ def err_dmm_volt(reading_v:np.ndarray, *, range_v:float=0.1, reading_pct:float=0
 # ---------------------------- ITS90 conversion -------------------------------
 DTYPE = np.dtype([('T_K', 'f8'), ('p_kPa', 'f8')])
 
-def load_its90_table(path:str|Path) -> np.ndarray:
-    """Load 'temp(K),pressure(kPa)' into a structured array."""
+def load_its90_table_orig(path:str|Path) -> np.ndarray:
+    """Load 'T_K,p_kPa' CSV into a structured array."""
     return np.genfromtxt(path, delimiter=',', dtype=DTYPE)
+
+def load_its90_table_own(path:str|Path, Dtype:np.dtype|None=DTYPE) -> np.ndarray:
+    """Load 'temp(K),pressure(kPa)' into a structured array."""
+    if Dtype is not None:
+        try:
+            return np.genfromtxt(path, dtype=DTYPE, comments='#', delimiter=',')
+        except ValueError:
+            return np.genfromtxt(path,comments='#',delimiter=',',names=False,)
+    else:
+        return np.genfromtxt(path,comments='#',delimiter=',',names=True,autostrip=True)
+
+def load_its90_table_old(path: str | Path, dtype: np.dtype | None = None) -> np.ndarray:
+    # Try headered file (your current case)
+    try:
+        arr = np.genfromtxt(path, delimiter=',', names=True, autostrip=True, comments='#')
+        return arr.astype(dtype or DTYPE, copy=False)
+    except Exception:
+        # Fallback: headerless 2-col file
+        data = np.genfromtxt(path, delimiter=',', autostrip=True, comments='#')
+        if data.ndim == 1:
+            data = data[None, :]
+        out = np.empty(len(data), dtype or DTYPE)
+        out['T_K']   = data[:, 0]
+        out['p_kPa'] = data[:, 1]
+        return out
+
+def load_its90_table(path: str | Path) -> np.ndarray:
+    arr = np.genfromtxt(path, delimiter=',', names=True, autostrip=True,
+                        comments='#', encoding='utf-8-sig')  # <- BOM-safe
+    # drop any blank-line rows that parsed as NaN
+    return arr[~(np.isnan(arr['T_K']) | np.isnan(arr['p_kPa']))]
 
 def T_from_p_kpa(p, table:np.ndarray):
     """Interpolate temperature (K) from pressure (kPa)."""
@@ -331,4 +362,120 @@ def print_struct(table: np.ndarray, stream=sys.stdout, fmt=".6g"):
     for row in zip(*cols):
         print(" ".join(f"{v:{w}{fmt}}" for v, w in zip(row, widths)), file=stream)
 
-ITS90_STRUCT = load_its90_table(cfg.MYPY/'ITS90.py')
+ITS90_STRUCT = load_its90_table_orig(cfg.MYPY/'ITS90.csv')
+
+
+# ----------------------------- york algorithm --------------------------------
+def york_fit(x, y, sx, sy, rho=None, max_iter=50, tol=1e-15):
+    """
+    York regression (York et al., 2004) for y = m*x + c with errors in x and y.
+    Inputs are 1D arrays: x, y, sx, sy (1σ). 'rho' is per-point correlation (same length) or None.
+    Returns dict with m, c, s_m, s_c, cov_mc, chi2, rchi2, dof, W.
+    """
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    sx = np.asarray(sx, float); sy = np.asarray(sy, float)
+    if rho is None: rho = np.zeros_like(x, dtype=float)
+    else: rho = np.asarray(rho, float)
+
+    # mask any NaNs / nonpositive errors
+    mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(sx) & np.isfinite(sy) & (sx>0) & (sy>0) & np.isfinite(rho)
+    x, y, sx, sy, rho = x[mask], y[mask], sx[mask], sy[mask], rho[mask]
+    if x.size < 2:
+        raise ValueError("Need at least two valid points")
+
+    wX = 1.0/(sx**2)
+    wY = 1.0/(sy**2)
+
+    # initial slope: OLS is fine; Deming(median variance ratio) is also okay
+    m = np.polyfit(x, y, 1)[0]
+
+    for _ in range(max_iter):
+        m_old = m
+        A = np.sqrt(wX*wY)
+        denom = (wX + m*m*wY - 2.0*m*rho*A)
+        # guard against zero/negative due to roundoff
+        denom = np.where(denom <= 0, np.finfo(float).tiny, denom)
+        W = (wX*wY) / denom
+
+        Xbar = np.sum(W*x) / np.sum(W)
+        Ybar = np.sum(W*y) / np.sum(W)
+        U = x - Xbar
+        V = y - Ybar
+
+        B = W * ( U/wY + m*V/wX - (m*U + V)*rho/A )
+        m = np.sum(W*B*V) / np.sum(W*B*U)
+
+        if (m_old/m - 1.0)**2 < tol:
+            break
+
+    c = Ybar - m*Xbar
+
+    # parameter uncertainties and covariance (York 2004; IsoplotR formulation)
+    x_adj = Xbar + B
+    xbar = np.sum(W*x_adj) / np.sum(W)
+    u = x_adj - xbar
+    s_m = np.sqrt(1.0 / np.sum(W*u*u))
+    s_c = np.sqrt(1.0 / np.sum(W) + (xbar*s_m)**2)
+    cov_mc = -xbar * (s_m**2)
+
+    chi2 = np.sum(W*(y - (m*x + c))**2)
+    dof = x.size - 2
+    rchi2 = chi2/dof if dof > 0 else np.nan
+
+    return {
+        "m": m, "c": c,           # slope, intercept
+        "s_m": s_m, "s_c": s_c,   # 1σ uncertainties
+        "cov_mc": cov_mc,         # covariance between m and c
+        "W": W, "chi2": chi2, "rchi2": rchi2, "dof": dof
+    }
+
+def predict_y_with_uncertainty(x0, m, c, s_m, s_c, cov_mc):
+    """ŷ and its 1σ from the linear parameter covariance."""
+    x0 = np.asarray(x0, float)
+    yhat = m*x0 + c
+    var  = (s_c**2) + 2*x0*cov_mc + (x0**2)*(s_m**2)
+    return yhat, np.sqrt(np.maximum(var, 0.0))
+
+
+# ------------------------- saving/loading helpers ----------------------------
+def results_to_df(results: dict[str, dict[str, float]]) -> pd.DataFrame:
+    # stable row order
+    items = sorted(results.items())
+    idx   = [k for k, _ in items]
+    rows  = [v for _, v in items]
+    df = pd.DataFrame(rows, index=idx)
+    df.index.name = "key"
+    return df
+
+def save_results(results: dict[str, dict[str, float]], path:str|Path, fmt:str="csv"):
+    path = Path(path)
+    df = results_to_df(results)
+
+    fmt = fmt.lower()
+    if fmt == "csv":
+        df.to_csv(path, float_format="%.10g")         # human-friendly, great for git
+    elif fmt == "json":
+        df.to_json(path, orient="index")              # easy round-trip as dict-of-dicts
+    elif fmt == "npz":
+        # Save as a structured array inside an .npz
+        rec = df.reset_index().to_records(index=False)
+        np.savez(path, table=rec, columns=np.array(df.reset_index().columns, dtype=object))
+    else:
+        raise ValueError(f"Unknown format: {fmt}")
+
+def load_results(path: str | Path):
+    path = Path(path)
+    suf = path.suffix.lower()
+    if suf == ".csv":
+        df = pd.read_csv(path, index_col="key")
+        return df.to_dict(orient="index")
+    elif suf == ".json":
+        return pd.read_json(path, orient="index").to_dict(orient="index")
+    elif suf == ".npz":
+        with np.load(path, allow_pickle=True) as z:
+            rec = z["table"]
+            cols = list(z["columns"])
+        df = pd.DataFrame.from_records(rec, columns=cols).set_index("key")
+        return df.to_dict(orient="index")
+    else:
+        raise ValueError(f"Don’t know how to load {path}")
