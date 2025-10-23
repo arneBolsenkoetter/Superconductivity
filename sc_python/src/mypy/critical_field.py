@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import csv, os
 import numpy as np, sympy as sp
-import config as cfg
+import config as cfg, core
 import matplotlib.pyplot as plt
 
 from core import Measurement
 from config import figrect, FIG_DIR, MYPY
 from scipy.odr import ODR, RealData, Model
 from itertools import islice
+from calibration import temperature_from_measurement
 from matplotlib.patches import Ellipse
 
 
@@ -92,17 +93,17 @@ def odr_prediction_band(xgrid, m, b, cov):
     var = np.einsum('ij,jk,ik->i', A, cov, A)
     return m*xgrid + b, np.sqrt(np.maximum(var, 0.0))
 
-def intersection_ground_neither(res_ground, res_neither_inverted, scale_by_rchi2=True,return_cov=False):
+def intersection_ground_nether(res_ground, res_nether_inverted, scale_by_rchi2=True,return_cov=False):
     """
         Intersection of:
         grounds (direct):     U = m_g * H + c_g
-        neither (inverted):   H = a_n * U + c_n
+        nether (inverted):   H = a_n * U + c_n
 
         Parameters
         ----------
         res_ground : dict   # from odr_line(H, U, sH, sU)
             expects keys: 'm','b','cov','rchi2'
-        res_neither_inverted : dict  # from odr_line(U, H, sU, sH)
+        res_nether_inverted : dict  # from odr_line(U, H, sU, sH)
             expects keys: 'm','b','cov','rchi2'
         scale_by_rchi2 : bool
             If True, scale parameter covariances by reduced chi^2 (recommended).
@@ -116,7 +117,7 @@ def intersection_ground_neither(res_ground, res_neither_inverted, scale_by_rchi2
         Hs, Us, sH, sU, covHU, Sigma2x
     """
     mg, cg, Cg, rg = res_ground['m'], res_ground['b'], np.asarray(res_ground['cov'], float), res_ground['rchi2']
-    a,  cn, Cn, rn = res_neither_inverted['m'], res_neither_inverted['b'], np.asarray(res_neither_inverted['cov'], float), res_neither_inverted['rchi2']
+    a,  cn, Cn, rn = res_nether_inverted['m'], res_nether_inverted['b'], np.asarray(res_nether_inverted['cov'], float), res_nether_inverted['rchi2']
 
     # Optionally inflate parameter covariances if χ²_ν != 1
     if scale_by_rchi2:
@@ -214,6 +215,20 @@ def draw_cov_ellipse(ax, H0, U0, Sigma2x2, n_sigma=1.0, **kwargs):
     # ax.autoscale_view()
     return e
 
+def min_run(mask: np.ndarray, k: int = 2) -> np.ndarray:
+    """Keep only True-runs of length >= k."""
+    if k <= 1:
+        return mask
+    m = mask.astype(int)
+    d = np.diff(np.r_[0, m, 0])
+    starts = np.flatnonzero(d == 1)
+    ends   = np.flatnonzero(d == -1)
+    out = np.zeros_like(mask, bool)
+    for s, e in zip(starts, ends):
+        if (e - s) >= k:
+            out[s:e] = True
+    return out
+
 
 # ----------------- load .npzs into 'Measurement'-instances -------------------
 mess: dict[str,Measurement] = {}
@@ -279,7 +294,7 @@ tops = [
     (mess['m13'].u_spule>=15.000e-5)&(mess['m13'].u_probe>=16.881e-5),
     (mess['m14'].u_spule>=16.397e-5)&(mess['m14'].u_probe>=16.963e-5),
 ]
-neither = [
+nether = [
     (mess['m3'].u_probe>=8.000e-5)  &(mess['m3'].u_probe<=16.828e-5),
     (mess['m4'].u_probe>=8.155e-5)  &(mess['m4'].u_probe<=16.858e-5),
     (mess['m5'].u_probe>=8.616e-5)  &(mess['m5'].u_probe<=16.746e-5),
@@ -293,7 +308,7 @@ neither = [
     (mess['m13'].u_probe>=8.000e-5) &(mess['m13'].u_probe<=16.522e-5),
     (mess['m14'].u_probe>=8.389e-5) &(mess['m14'].u_probe<=16.640e-5),
 ]
-neither2 = [
+nether2 = [
     None,
     None,
     None,
@@ -316,7 +331,7 @@ rising = [
     (mess['m8'].u_spule>=5.300e-5),
     (mess['m9'].u_spule>=7.600e-5),
     (mess['m10'].u_spule>=10.1e-5),
-    (mess['m11'].u_spule>=12.3e-5),
+    (mess['m11'].u_spule>=12.35e-5),
     (mess['m12'].u_spule>=13.2e-5),
     (mess['m13'].u_spule>=14.5e-5),
     (mess['m14'].u_spule>=16.1e-5),
@@ -334,219 +349,290 @@ else:
     base_string='After sweep of U_spule\n started (t>t0)'
     base_name='_t0s_masked'
 
-plot_raw_voltage =False
 
-include_grounds =True
-include_tops    =True
-include_neither =True
+include_grounds = True
+include_tops    = True
+include_nether = True
 
 fit_grounds = True
 fit_tops    = True
 fit_nether  = True
 
-test_mode =True
+test_mode           = True
+plot_temperatures   = True
+plot_intersec       = True
 
 
 # ------------------------------ main workflow --------------------------------
-results = {}
+results = {k: {} for k in mess}
+
+from core import load_its90_table_orig
+tab_pascal = load_its90_table_orig(MYPY/'ITS90.csv')
+tab_bar=tab_pascal.copy()
+names=list(tab_bar.dtype.names)
+names[names.index('p_kPa')]='p_bar'
+tab_bar.dtype.names=tuple(names)
+tab_bar['p_bar']*=1e-2
+
 
 it = mess.items()
 if test_mode:
     it = islice(it, 12)  # set int to the number of items you want to iterate over when test_mode is activated
 
 for i,(key,m) in enumerate(it):
-    if plot_raw_voltage:
-        fig,ax=plt.subplots(nrows=1,ncols=1,figsize=figrect())
-    fig2,ax2=plt.subplots(nrows=1,ncols=1,figsize=figrect())
+    # -------------------- workflow to get temperatures -----------------------
+    x1=m.time[masks[i]]
+    y1=m.u_ab[masks[i]]
+    y1err=m.u_ab_err[masks[i]]
 
-    x=m.u_spule[masks[i]]
-    x_err=m.u_spule_err[masks[i]]
-    y=m.u_probe[masks[i]]
-    y_err=m.u_probe_err[masks[i]]
+    from calibration import slope, slope_var, slope_err, offset, offset_var, offset_err , covar, varco
+    pressure,pressure_err = core.p_from_Up(
+        Up=y1,Up_err=y1err,
+        m=slope,dm=slope_err,b=offset,db=offset_err,covar=covar)
 
-    I_arr=x/R
-    I_err=x_err/R
-    Hall=np.zeros_like(m.u_spule)
-    Hallerr=np.zeros_like(m.u_spule_err)
-    Hall[masks[i]]=H(I_arr,N,Ro,Ri,L)
-    Hallerr[masks[i]]=Herr(I=I_arr,I_err=I_err)
-    Harr=H(I_arr,N,Ro,Ri,L)
-    Haerr=Herr(I=I_arr,I_err=I_err)
+    T_tab=tab_bar['T_K']
+    p_tab=tab_bar['p_bar']
 
-    ax2.errorbar(x=Harr,xerr=Haerr,y=y,yerr=y_err,label=f'{key}: {base_string}',**cfg.err_kw(),fmt='x',ls='',mfc='cyan',mec='cyan',)
-    if plot_raw_voltage:
-        ax.errorbar(x=x,xerr=x_err,y=y,yerr=y_err,label=f'{key}: {base_string}',**cfg.err_kw(),fmt='x',ls='',mfc='cyan',mec='cyan',)
+    from scipy.interpolate import PchipInterpolator
+    p_of_T  = PchipInterpolator(T_tab, p_tab)        # forward (smooth, monotone)
+    T_of_p  = PchipInterpolator(p_tab, T_tab)        # inverse
+    dpdT    = p_of_T.derivative()
+    dTdp    = T_of_p.derivative()                        # directly dT/dp (kPa⁻1)
 
-    rose_short = np.r_[False,np.diff(y) > 0]
-    rose = np.zeros_like(m.u_probe,dtype=bool)
-    rose[masks[i]] = rose_short
+    T_meas=T_of_p(pressure)
+    Tpack = temperature_from_measurement(m)
+    T = Tpack['T'][masks[i]]
+    T_asym = np.vstack([Tpack['dT_minus'][masks[i]],Tpack['dT_plus'][masks[i]]])
+    Tilo = T - T_asym[0,:]; Tihi=T+T_asym[1,:]
+    Tilomin = Tilo.min();   Tihimax=Tihi.max()
+    Tmedian=np.median(T);   Tmean=np.mean(T)
 
-    fall_short = np.r_[False,np.diff(y)<0]
-    fall = np.zeros_like(m.u_probe,dtype=bool)
-    fall[masks[i]] = fall_short
+    T_lo=T_of_p(pressure-pressure_err);    T_hi=T_of_p(pressure+pressure_err)
+    T_err_asym=np.vstack([T_meas-T_lo, T_hi-T_meas])
 
-    if include_grounds or include_tops or include_neither:
-        _with='_with'
-    else:
-        _with=''
+    meanT=np.mean(T_meas)
+    medianT=np.median(T_meas)
+    medianT_plus_sigma=T_hi.max()-medianT
+    medianT_minus_sigma=medianT-T_lo.min()
+    print(f'{key:>4}: Temp.Median:\t {medianT} (+{medianT_plus_sigma},-{medianT_minus_sigma})')
 
-    maskt=masks[i]&tops[i]
-    xt=m.u_spule[maskt]
-    Ht=Hall[maskt]
-    yt=m.u_probe[maskt]
-    if include_tops:
-        if plot_raw_voltage:
-            ax.scatter(x=xt,y=yt,label=f'tops {key}',c='orange',zorder=4,marker='+')
-        ax2.scatter(x=Ht,y=yt,label=f'tops {key}',c='orange',zorder=4,marker='+')
-        top_string='_tops'
-        if fit_tops:
-            sHt=Hallerr[maskt]
-            syt=m.u_probe_err[maskt]
-            res=odr_line(Ht,yt,sHt,syt)
-            print(f"{key:>5}:  U_probe = ({res['m']:.6g}±{res['sm']:.2g}) • H + "
-                f"({res['b']:.6g}±{res['sb']:.2g});  χ^2_ν={res['rchi2']:.2g}")
-            xx=np.linspace(Harr.min(),Harr.max(),1000)
-            yy,syy= odr_prediction_band(xx,res['m'],res['b'],res['cov'])
-            ax2.plot(xx,yy,lw=0.8,label=f'{key}: ODR top-fit')
-            ax2.fill_between(xx,yy-syy,yy+syy,alpha=0.15,linewidth=0.3)
-    else:
-        top_string=''
+    results[key]['temp'] = {
+        'med':  Tmedian,
+        'men':  Tmean,
+        'min':  Tilomin,
+        'max':  Tihimax,
+    }
 
-    maskg=masks[i]&grounds[i]
-    xg=m.u_spule[maskg]
-    Hg=Hall[maskg]
-    yg=m.u_probe[maskg]
-    if include_grounds:
-        if plot_raw_voltage:
-            ax.scatter(x=xg,y=yg,label=f'grounds {key}',c='orange',zorder=4,marker='x')
-        ax2.scatter(x=Hg,y=yg,label=f'grounds {key}',c='orange',zorder=4,marker='x')
-        ground_string='_grounds'
+    if plot_temperatures and __name__=="__main__":
+        fig1,ax1=plt.subplots(nrows=1,ncols=1,figsize=figrect())
+        h1=ax1.errorbar(
+            x=x1,y=pressure,yerr=pressure_err,
+            label=f'{key} Vapor-pressure',
+            **cfg.err_kw(elw=0.1),
+            fmt='x',ls='',mfc='cyan',mec='cyan',#zorder=5,
+            )
+        handles = [h1]
+        for bar in h1[2]:
+            bar.set_alpha(0.7)
+        ax1.set_ylabel(r'Pressure $P$ [bar]')
+        ax1.set_xlabel(r"Time $t$ [s]")
+
+        tt=np.linspace(x1.min(),x1.max(),300)
+
+        secax1=ax1.twinx()
+        secax1.patch.set_alpha(0.0)
+        secax1.set_zorder(ax1.get_zorder())
+        ax1.patch.set_alpha(0.0)
+        use_legacy_temp=False
+        if use_legacy_temp:
+            h2 = secax1.errorbar(
+                x=x1,y=T_meas,yerr=T_err_asym,
+                label=r'ITS90-converted temperature',
+                **cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue'
+                )
+            h3=secax1.hlines(medianT,xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='k', label=r'Temperature Median')
+            h4=secax1.hlines(meanT,xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='orange', label=r'Temperature Mean')
+            # secax1.axhline(medianT, xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='k', label=r'Temperature Median')   <- Axes.axhline thinks xmin,xmax as ratios of plotrange. Plot in data-coordinates:
+            secax1.fill_between(tt,medianT-medianT_minus_sigma,medianT+medianT_plus_sigma,alpha=0.3,lw=0.3,color='k')       # <- may have troube with a float instead of an array as yy, Better:
+            # secax1.axhspan(medianT-medianT_minus_sigma, medianT+medianT_plus_sigma, alpha=0.3, lw=0.3)
+            handles.append([h2,h3,h4])
+        else:
+            h2=secax1.errorbar(x=x1,y=T,yerr=T_asym,label='Calibrated Temperature',**cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue')
+            h3=secax1.hlines(Tmedian,xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='k', label=r'Temperature Median')
+            h4=secax1.hlines(Tmean,xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='orange', label=r'Temperature Mean')
+            secax1.fill_between(tt,Tilomin,Tihimax,alpha=0.3,lw=0.3,color='k')
+            handles.extend([h2,h3,h4])
+        secax1.set_ylabel(r'Temperature $T$ [K]')
+
+        labels=[h.get_label() for h in handles]
+        secax1.legend(handles,labels,loc='upper right',fontsize=6)
+
+
+
+    # ------------------- workflow to get critical field ----------------------
+    get_critical=True
+    if get_critical:
+        x=m.u_spule[masks[i]]
+        x_err=m.u_spule_err[masks[i]]
+        y=m.u_probe[masks[i]]
+        y_err=m.u_probe_err[masks[i]]
+
+        I_arr=x/R
+        I_err=x_err/R
+        Hall=np.zeros_like(m.u_spule)
+        Hallerr=np.zeros_like(m.u_spule_err)
+        Hall[masks[i]]=H(I_arr,N,Ro,Ri,L)
+        Hallerr[masks[i]]=Herr(I=I_arr,I_err=I_err)
+        Harr=H(I_arr,N,Ro,Ri,L)
+        Haerr=Herr(I=I_arr,I_err=I_err)
+
+        rose=np.r_[False,np.diff(m.u_spule)>0]
+        rose=min_run(rose,3)                    # 'averages' over 3 consecutive points -> less prone to outliers
+        fall=np.r_[False,np.diff(m.u_spule)<0]
+        fall=min_run(fall,3)
+
+        if include_grounds or include_nether or include_tops:  _with='_with'
+        else:                                                   _with=''
+
+        if fit_grounds or fit_tops: fit_string='_fits';     xx=np.linspace(Harr.min(),Harr.max(),1000)
+        else:                       fit_string=''
+
+        maskg=masks[i]&grounds[i]
+        xg=m.u_spule[maskg]
+        Hg=Hall[maskg]
+        yg=m.u_probe[maskg]
         if fit_grounds:
             sHg=Hallerr[maskg]
             syg=m.u_probe_err[maskg]
-            res=odr_line(Hg,yg,sHg,syg)
-            print(f"{key:>5}:  U_probe = ({res['m']:.6g}±{res['sm']:.2g}) • H + "
-                f"({res['b']:.6g}±{res['sb']:.2g});  χ^2_ν={res['rchi2']:.2g}")
-            xx=np.linspace(Harr.min(),Harr.max(),1000)
-            yy,syy= odr_prediction_band(xx,res['m'],res['b'],res['cov'])
-            ax2.plot(xx,yy,lw=0.8,label=f'{key}: ODR ground-fit')
-            ax2.fill_between(xx,yy-syy,yy+syy,alpha=0.15,linewidth=0.3)
-    else:
-        ground_string=''
+            resg=odr_line(Hg,yg,sHg,syg)
+            print(f"{key:>5}:  U_probe = ({resg['m']:.6g}±{resg['sm']:.2g}) • H + "
+                f"({resg['b']:.6g}±{resg['sb']:.2g});  χ^2_ν={resg['rchi2']:.2g}")
+            yyg,syyg= odr_prediction_band(xx,resg['m'],resg['b'],resg['cov'])
 
-    maskn=(masks[i]&neither[i]) if include_neither else masks[i]
-    xn=m.u_spule[maskn]
-    Hn=Hall[maskn]
-    yn=m.u_probe[maskn]
-    if include_neither and rising[i] is None:
-        if plot_raw_voltage:
-            ax.scatter(x=xn,y=yn,label=f'the inbetweeners {key}',zorder=4,c='purple')
-        ax2.scatter(x=Hn,y=yn,label=f'the inbetweeners {key}',zorder=4,c='purple')
-        neither_string='_nether'
-        if fit_nether:
+        maskt=masks[i]&tops[i]
+        xt=m.u_spule[maskt]
+        Ht=Hall[maskt]
+        yt=m.u_probe[maskt]
+        if fit_tops:
+            sHt=Hallerr[maskt]
+            syt=m.u_probe_err[maskt]
+            rest=odr_line(Ht,yt,sHt,syt)
+            print(f"{key:>5}:  U_probe = ({rest['m']:.6g}±{rest['sm']:.2g}) • H + "
+                f"({rest['b']:.6g}±{rest['sb']:.2g});  χ^2_ν={rest['rchi2']:.2g}")
+            yyt,syyt= odr_prediction_band(xx,rest['m'],rest['b'],rest['cov'])
+
+        maskn=(masks[i]&nether[i]) if include_nether else masks[i]
+        xn=m.u_spule[maskn]
+        Hn=Hall[maskn]
+        yn=m.u_probe[maskn]
+        if rising[i] is None and fit_nether:
             syn=m.u_probe_err[maskn]
             sHn=Hallerr[maskn]
             inv=odr_line(yn,Hn,syn,sHn)
+            yyn=np.linspace(y.min(),y.max(),1000)
+            xxn,sxxn=odr_prediction_band(yyn,inv['m'],inv['b'],inv['cov'])
             print(f"{key:>5}: H = ({inv['m']:.6g} ± {inv['sm']:.2g}) · U + ({inv['b']:.6g} ± {inv['sb']:.2g}); χ²_ν={inv['rchi2']:.2g}")
-            yy=np.linspace(y.min(),y.max(),1000)
-            xx,sxx=odr_prediction_band(yy,inv['m'],inv['b'],inv['cov'])
-            ax2.plot(xx,yy,lw=0.8,label=f'{key}: ODR slope-fit')
-            ax2.fill_betweenx(yy,xx-sxx,xx+sxx,alpha=0.15,linewidth=0.3)
-    else:
-        neither_string=''
 
-    rising_i = rising[i] if rising[i] is not None else np.zeros_like(masks[i])
-    if rising[i] is not None:
-        maskr1=(maskn&((rising_i&~neither2[i])&rose)) if neither2[i] is not None else (maskn&(rising_i&rose))
-        xr1=m.u_spule[maskr1]
-        Hr1=Hall[maskr1]
-        yr1=m.u_probe[maskr1]
+        if rising[i] is not None:
+            maskr1=(maskn&((rising[i]&~nether2[i])&rose)) if nether2[i] is not None else (maskn&(rising[i]&rose))
+            # maskr1=min_run(maskr1,3)
+            xr1=m.u_spule[maskr1]
+            Hr1=Hall[maskr1]
+            yr1=m.u_probe[maskr1]
 
-        maskr2=(maskn&((rising_i&neither2[i])&rose)) if neither2[i] is not None else np.zeros_like(masks[i])
-        xr2=m.u_spule[maskr2]
-        Hr2=Hall[maskr2]
-        yr2=m.u_probe[maskr2]
+            maskr2=(maskn&((rising[i]&nether2[i])&rose)) if nether2[i] is not None else np.zeros_like(masks[i])
+            # maskr2=min_run(maskr2,3)
+            xr2=m.u_spule[maskr2]
+            Hr2=Hall[maskr2]
+            yr2=m.u_probe[maskr2]
 
-        maskf=maskn&fall
-        xf=m.u_spule[maskf]
-        Hf=Hall[maskf]
-        yf=m.u_probe[maskf]
+            maskf=maskn&fall
+            xf=m.u_spule[maskf]
+            Hf=Hall[maskf]
+            yf=m.u_probe[maskf]
 
-        if plot_raw_voltage:
-            ax.scatter(x=xr1,y=yr1,label=f'the rising {key}',zorder=4,c='red',marker='^',s=6)
-            if neither2 is not None:
-                ax.scatter(x=xr2,y=yr2,label=f'The rising 2 {key}',zorder=4,c='pink',marker='^',s=6)
-            ax.scatter(x=xf,y=yf,label=f'the falling {key}',zorder=4,c='red',marker='v',s=6)
+            if fit_nether:
+                syr1=m.u_probe_err[maskr1]
+                sHr1=Hallerr[maskr1]
+                inv=odr_line(yr1,Hr1,syr1,sHr1)
+                yyn=np.linspace(y.min(),y.max(),1000)
+                xxn,sxxn=odr_prediction_band(yyn,inv['m'],inv['b'],inv['cov'])
+                print(f"{key:>5}: H = ({inv['m']:.6g} ± {inv['sm']:.2g}) · U + ({inv['b']:.6g} ± {inv['sb']:.2g}); χ²_ν={inv['rchi2']:.2g}")
 
-        ax2.scatter(x=Hr1,y=yr1,label=f'the rising {key}',zorder=4,c='red',marker='^',s=6)
-        if neither2 is not None:
-            ax2.scatter(x=Hr2,y=yr2,label=f'The rising 2 {key}',zorder=4,c='pink',marker='^',s=6)
-        ax2.scatter(x=Hf,y=yf,label=f'the falling {key}',zorder=4,c='red',marker='v',s=6)
+        if fit_grounds and fit_nether:
+            interstring='_intersection'
+            print("grounds: sm^2 vs cov[0,0] ->", resg['sm']**2, resg['cov'][0,0], "  χ²ν=", resg['rchi2'])
+            print("nether: sm^2 vs cov[0,0] ->", inv['sm']**2, inv['cov'][0,0], "  χ²ν=", inv['rchi2'])
+            # Draw axes-aligned ellipse:
+            # Hstar_ax,Ustar_ax,sH_ax,sU_ax = intersection_ground_nether(res,inv,scale_by_rchi2=False)
 
-        if fit_nether:
-            syr1=m.u_probe_err[maskr1]
-            sHr1=Hallerr[maskr1]
-            inv=odr_line(yr1,Hr1,syr1,sHr1)
-            print(f"{key:>5}: H = ({inv['m']:.6g} ± {inv['sm']:.2g}) · U + ({inv['b']:.6g} ± {inv['sb']:.2g}); χ²_ν={inv['rchi2']:.2g}")
-            yy=np.linspace(y.min(),y.max(),1000)
-            xx,sxx=odr_prediction_band(yy,inv['m'],inv['b'],inv['cov'])
-            ax2.plot(xx,yy,lw=0.8,label=f'{key}: ODR slope-fit')
-            ax2.fill_betweenx(yy,xx-sxx,xx+sxx,alpha=0.15,linewidth=0.3)
+            Hstar, Ustar, sH, sU, covHU, Sigma = intersection_ground_nether(resg, inv, scale_by_rchi2=False, return_cov=True)
+            print(f"{key}: Intersection at H* = {Hstar:.6g} ± {sH:.2g},  U* = {Ustar:.6g} ± {sU:.2g}")
 
-    if plot_raw_voltage:
-        ax.legend(loc='best',fontsize=6)
-        ax.set_xlabel(r"$U_\mathrm{Spule}$")
-        ax.set_ylabel(r"$U_\mathrm{Probe}$")
+            results[key]['crit'] = {
+                'Hstar':    Hstar,
+                'sH':       sH,
+                'Ustar':    Ustar,
+                'sU':       sU,
+                'covHU':    covHU,
+            }
+        else: interstring=''
 
-    if fit_grounds or fit_nether or fit_tops:
-        fit_string='_fits'
-    else:
-        fit_string=''
+        if plot_intersec and __name__=="__main__":
+            fig2,ax2=plt.subplots(nrows=1,ncols=1,figsize=figrect())
+            ax2.errorbar(x=Harr,xerr=Haerr,y=y,yerr=y_err,label=f'{key}: {base_string}',**cfg.err_kw(),fmt='x',ls='',mfc='cyan',mec='cyan',)
+            if include_tops:
+                top_string='_tops'
+                ax2.scatter(x=Ht,y=yt,label=f'tops {key}',c='orange',zorder=4,marker='+')
+                if fit_tops:
+                    ax2.plot(xx,yyt,lw=0.8,label=f'{key}: ODR top-fit')
+                    ax2.fill_between(xx,yyt-syyt,yyt+syyt,alpha=0.15,linewidth=0.3)
+            else: top_string=''
+            if include_grounds:
+                ground_string='_grounds'
+                ax2.scatter(x=Hg,y=yg,label=f'grounds {key}',c='orange',zorder=4,marker='x')
+                if fit_grounds:
+                    ax2.plot(xx,yyg,lw=0.8,label=f'{key}: ODR ground-fit')
+                    ax2.fill_between(xx,yyg-syyg,yyg+syyg,alpha=0.15,linewidth=0.3)
+            else: ground_string=''
+            if rising[i] is None:
+                if include_nether:
+                    nether_string='_nether'
+                    ax2.scatter(x=Hn,y=yn,label=f'the inbetweeners {key}',zorder=4,c='purple')
+                else: nether_string=''
+            else:
+                if include_nether:
+                    nether_string='_nether'
+                    ax2.scatter(x=Hr1,y=yr1,label=f'the rising {key}',zorder=4,c='red',marker='^',s=6)
+                    if nether2[i] is not None:
+                        ax2.scatter(x=Hr2,y=yr2,label=f'The rising 2 {key}',zorder=4,c='pink',marker='^',s=6)
+                    ax2.scatter(x=Hf,y=yf,label=f'the falling {key}',zorder=4,c='red',marker='v',s=6)
+                else: nether_string=''
+            if fit_nether:
+                ax2.plot(xxn,yyn,lw=0.8,label=f'{key}: ODR slope-fit')
+                ax2.fill_betweenx(yyn,xxn-sxxn,xxn+sxxn,alpha=0.15,linewidth=0.3)
+            ax2.legend(loc='best',fontsize=6)
+            ax2.set_xlabel(r"Magnetic field at center of coil")
+            ax2.set_ylabel(r"$U_{\mathrm{Probe}}$")
+            if fit_grounds and fit_nether:
+                draw_sigma_ellipse(ax2,Hstar,Ustar,sH,sU,n_sigma=1.0,edgecolor='w',lw=1.0,alpha=1.0,zorder=8)
+                draw_cov_ellipse(ax2, Hstar, Ustar, Sigma, n_sigma=1.0, edgecolor='k',zorder=9)
+                ax2.plot(Hstar,Ustar,'o',ms=3,mfc='w',mec='k',zorder=8)
 
-    ax2.legend(loc='best',fontsize=6)
-    ax2.set_xlabel(r"Magnetic field at center of coil")
-    ax2.set_ylabel(r"$U_{\mathrm{Probe}}$")
-
-    if fit_grounds and fit_nether:
-        print("grounds: sm^2 vs cov[0,0] ->", res['sm']**2, res['cov'][0,0], "  χ²ν=", res['rchi2'])
-        print("neither: sm^2 vs cov[0,0] ->", inv['sm']**2, inv['cov'][0,0], "  χ²ν=", inv['rchi2'])
-        # Draw axes-aligned ellipse:
-        Hstar,Ustar,sH,sU = intersection_ground_neither(res,inv,scale_by_rchi2=False)
-        print(f"{key}: Intersection at H* = {Hstar:.6g} ± {sH:.2g},  U* = {Ustar:.6g} ± {sU:.2g}")
-        draw_sigma_ellipse(ax2,Hstar,Ustar,sH,sU,n_sigma=1.0,edgecolor='w',lw=1.0,alpha=1.0,zorder=8)
-
-        # Draw tilted ellipse with covariances
-        Hstar, Ustar, sH, sU, covHU, Sigma = intersection_ground_neither(res, inv, scale_by_rchi2=False, return_cov=True)
-        draw_cov_ellipse(ax2, Hstar, Ustar, Sigma, n_sigma=1.0, edgecolor='k',zorder=9)
-        ax2.plot(Hstar,Ustar,'o',ms=3,mfc='w',mec='k',zorder=8)
-
-        results[key] = {
-            'Hstar':    Hstar,
-            'sH':       sH,
-            'Ustar':    Ustar,
-            'sU':       sU,
-            'covHU':    covHU,
-        }
-
-        interstring='_intersection'
-    else:
-        interstring=''
-
-    if test_mode:
-        if plot_raw_voltage:
-            fig_name = f'{m.source.stem}{base_name}_with_err{ground_string}{top_string}'
+    if not test_mode and __name__=="__main__":
+        if plot_temperatures:
+            fig_name = f'{m.source.stem}{base_name}_temp'
             destiny=FIG_DIR/fig_name;   print('Files saved as: '+str(destiny)+'(.png/.pdf)')
-            fig.savefig(fname=destiny.with_suffix('.pdf'))
-            fig.savefig(fname=destiny.with_suffix('.png'))
-
-        fig2_name = f'{m.source.stem}{base_name}_mag_field{_with}{ground_string}{top_string}{neither_string}{fit_string}{interstring}'
-        destiny2 = FIG_DIR/fig2_name; print('Files saved as: '+cfg.user_stripped(destiny2)+'(.png/pdf)')
-        fig2.savefig(fname=destiny2.with_suffix('.pdf'))
-        fig2.savefig(fname=destiny2.with_suffix('.png'))
-        cfg.prRed('Script executed in TEST-MODE -> No images saved')
+            fig1.savefig(fname=destiny.with_suffix('.pdf'))
+            fig1.savefig(fname=destiny.with_suffix('.png'))
+        if plot_intersec:
+            fig2_name = f'{m.source.stem}{base_name}_mag_field{_with}{ground_string}{top_string}{nether_string}{fit_string}{interstring}'
+            destiny2 = FIG_DIR/fig2_name; print('Files saved as: '+cfg.user_stripped(destiny2)+'(.png/pdf)')
+            fig2.savefig(fname=destiny2.with_suffix('.pdf'))
+            fig2.savefig(fname=destiny2.with_suffix('.png'))
+    else: cfg.prRed('Script executed in TEST-MODE -> No images saved, No dict exported')
 
     plt.show()
     plt.close()
 
-out_csv = MYPY / "intersections.csv"  # choose your preferred directory
-fieldnames = ["run", "H_star", "sH", "U_star", "sU", "covHU"]
+print(results)

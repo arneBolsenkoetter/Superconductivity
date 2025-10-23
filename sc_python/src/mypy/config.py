@@ -8,17 +8,17 @@
 # Last but not lest this document defines a 'breaker' which allows you to set breakpoints manually in python-scripts (see breaker()).
 
 
-# --------------------------------- imports -----------------------------------
+# ------------------------------------- imports ----------------------------------------
 from __future__ import annotations  # always first
 
-import os, atexit, sys, re
-
+import atexit
+import os, sys, re
 import numpy as np
 
 from pathlib import Path
 
 
-# --------------------------------- breaker -----------------------------------
+# --------------------------------- auxiliary helper -----------------------------------
 def confirm(msg="Continue?", default=False):
     """
         Returns True to continue, False to abort.
@@ -37,6 +37,7 @@ def confirm(msg="Continue?", default=False):
         return False
     return ans in ("y", "yes")
 
+# some functions to print in colour with terminal
 def prRed(s): print("\033[91m {}\033[00m".format(s))
 def prGreen(s): print("\033[92m {}\033[00m".format(s))
 def prYellow(s): print("\033[93m {}\033[00m".format(s))
@@ -46,12 +47,69 @@ def prCyan(s): print("\033[96m {}\033[00m".format(s))
 def prLightGray(s): print("\033[97m {}\033[00m".format(s))
 def prBlack(s): print("\033[90m {}\033[00m".format(s))
 
+# mask user-directory on print ->   NEVER SHOW <$HOME> to A.I.
+def user_stripped(path:Path) -> str:
+    """ 
+        This is just a tiny substitution. It allows the user to hide its $HOME directory on print-out. 
+        Suplementing this function to any path about to be printed, like so
 
-# ---------------------------- Project Locations ------------------------------
-# directory MUST be sctructured like: 
-# ~/path/to/Superconductivity/sc_python/src/mySC/config.py
-config_path     = Path(__file__).resolve()  
-PROJECT_ROOT    = config_path.parents[3]
+            'print(user_stripped(this_or_that_directory))',
+
+        lets you safly copy-paste your error-code to AIs without unwillingly sharing sensible personal data.
+
+
+        # P.S.:
+        # You might want to add this following substitution-function to your ~/.zshrc, ~/.bashrc or similar (written for zsh):
+        # # Run any command, show ~ instead of $HOME in its output
+        # with-tilde() {
+        # # -u = unbuffered so lines appear immediately
+        # command "$@" 2> >(sed -u "s|$HOME|~|g; s|<$HOME>|~|g" >&2) | sed -u "s|$HOME|$
+        # return $pipestatus[1]
+        # }
+
+        # # optional convenience aliases for noisy tools
+        # alias git='with-tilde git'
+        # alias pip='with-tilde pip'
+        # alias python='with-tilde python'
+        # alias pytest='with-tilde pytest'
+    """
+    from pathlib import Path
+    home = Path.home()
+    return re.sub(f'{home}','~',str(path))
+
+# Dictate distinguished Dictionaries - class-definition:
+class AttrDict(dict):
+    __getattr__ = dict.get
+    def __setattr__(self,k,v): self[k]=v
+    def __delattr__(self,k): del self[k]
+# function to convert any dict into AttrDict
+def attrmap(x:dict[object,object]) -> AttrDict:
+    """
+        Usage:
+        Say you have already defined a dictionary   Dict: dict[...,...] = {...,...},    then:
+
+            Dict = config.attrmap(Dict)
+
+        Afterwards you can call your values by simply concatenating their keys with dots (works for dicts of dicts of dicts ... too):
+
+            Dict.key1.key2.key3...
+
+        BACKWARD-COMPATIBLE: Still allows you to acces dicts the standard way:      dict[key1][key2]...
+    """
+    if isinstance(x,dict):
+        return AttrDict({k: attrmap(v) for k,v in x.items()})
+    if isinstance(x,list):
+        return [attrmap(v) for v in x]
+    if isinstance(x,tuple):
+        return tuple(attrmap(v) for v in x)
+    return x
+
+
+# -------------------------------- Project Locations -----------------------------------
+config_path     = Path(__file__).resolve()          # !!! BEWARE: The path-setup relies on relative paths to this file;     
+PROJECT_ROOT    = config_path.parents[3]            # Either make sure you use the same layout and have placed this file in your equivalent to '~/path/to/PROJECT_ROOT', 
+                                                    # or adjust the below paths accordingly. 
+                                                    # To disperse any confusion: 'PROJECT_ROOT' is the generalisation of 'Superconductivity'
 FIG_DIR         = PROJECT_ROOT / 'figures'
 FIG_FINAL       = PROJECT_ROOT / 'figures' / 'final'
 PY_DIR          = PROJECT_ROOT / 'sc_python'
@@ -62,7 +120,7 @@ DATA_CLEAN      = PROJECT_ROOT / 'sc_data' / 'clean'
 LATEX_DIR       = PROJECT_ROOT / 'sc_latex'
 
 
-# ------------------------- physical constants (SI) ---------------------------
+# ----------------------------- physical constants (SI) --------------------------------
 c0      = 299792458.0
 h       = 6.62607015e-34
 hbar    = h/(2*np.pi)
@@ -71,10 +129,12 @@ me      = 9.1093837015e-31
 qe      = 1.602176634e-19
 
 
-# ------------------------------- mpl config ----------------------------------
+# ----------------------------------- mpl config ---------------------------------------
 figwidth = 3.375    # review letter syle column width - in inches!
 figheight = 0.75*figwidth
 figrect_norm=(figwidth,figheight)
+
+SCATTER_KW = dict(s=1, alpha=0.65, linewidths=0, edgecolors='face', rasterized=True)
 
 def figrect(ncols:int|None=1, nrows:int|None=1, sw:float|None=1.0, sh:float|None=1.0) -> tuple[float,float]:
     """
@@ -87,8 +147,11 @@ def figrect(ncols:int|None=1, nrows:int|None=1, sw:float|None=1.0, sh:float|None
         - sh:   float,  abbreviation for 'Squeeze Height', Stretches or thwats the figure_height by set value;
 
         Returns:
-        - (fig-width, fig-height):  tuple[float,float], size for a scientific-review-paper-styled image, in INCHES!
+        - (fig-width, fig-height):  tuple[float,float],     size for a scientific-review-paper-styled image,    in INCHES!
+                                    default:                (3.375", 0.75*3.375")
     """
+    figwidth = 3.375
+    figheight = 0.75*figwidth
     return (figwidth*ncols*sw, figheight*nrows*sh)
 
 def configure(overrides:dict[str,object]|None=None, final:bool|None=None, backend:str|None=None) -> None:
@@ -127,24 +190,6 @@ def configure(overrides:dict[str,object]|None=None, final:bool|None=None, backen
     global errorbar_linewidth
     errorbar_linewidth = max(rc['lines.linewidth']-0.2,0.1)
 
-def err_kw(elw:float|None=None,capsz:float|None=None):#-> dict[str,float]:
-    """
-        usage:
-        import config as cfg
-        ...
-        ax.errorbar(x, y, yerr=dy, **cfg.eb_kw(), capsize=2)
-    """
-    import matplotlib as mpl
-    if elw is None:
-        elw=max(mpl_rc.get('lines.linewidth',0.8)-0.2,0.1)
-    else:
-        elw=elw
-    if capsz is None:
-        capsize=mpl_rc.get('errorbar.capsize',2)
-    else:
-        capsize=capsz
-    return dict(elinewidth=elw, capthick=elw, capsize=capsize)
-
 def savefig(fig, name:str, ext:str='pdf', final:bool|None=None, **kwargs) -> Path:
     """Save with (or without) final LaTeX settings, independent of global state."""
     import matplotlib as mpl
@@ -175,12 +220,6 @@ def savefig(fig, name:str, ext:str='pdf', final:bool|None=None, **kwargs) -> Pat
         fig.savefig(destination, **kwargs)
     print(f'Saved as {destination_userstripped}')
     return destination
-
-def user_stripped(path:Path) -> str:
-    return re.sub('/Users/arnebolsenkoetter','~',str(path))
-
-
-SCATTER_KW = dict(s=1, alpha=0.65, linewidths=0, edgecolors='face', rasterized=True)
 
 mpl_rc: dict[str,object] = {
     'axes.axisbelow':       True,
@@ -240,16 +279,37 @@ mpl_rc: dict[str,object] = {
     "ytick.right":          True,
 #   1   2   3   4   5   6   7   8
 }
+
+# --- special cases for plt.errorbar ---
 errorbar_linewidth = max(mpl_rc['lines.linewidth']-0.2,0.1)
 
+def err_kw(elw:float|None=None, capsz:float|None=None):#-> dict[str,float]:
+    """
+        usage:
+        import config as cfg
+        ...
+        ax.errorbar(x, y, yerr=dy, **cfg.eb_kw(), capsize=2)
+    """
+    import matplotlib as mpl
+    if elw is None:
+        elw=max(mpl_rc.get('lines.linewidth',0.8)-0.2,0.1)
+    else:
+        elw=elw
+    if capsz is None:
+        capsize=mpl_rc.get('errorbar.capsize',2)
+    else:
+        capsize=capsz
+    return dict(elinewidth=elw, capthick=elw, capsize=capsize)
 
-# --------------------------- Final-export toggle -----------------------------
+
+# ----------------------------- plt final-export toggle --------------------------------
 # outsources text compilations in plots to TeX
 export_final:bool = bool(int(os.getenv("SC_EXPORT_FINAL", "0")))  # or set cfg.export_final=True in script
 
 # TeX compilation needs instructions->preamble. Optional: keep your LaTeX preamble in a file in your LaTeX project
 LATEX_PREAMBLE_FILE = LATEX_DIR / "__preamble_mpl__.tex"
 DEFAULT_PREAMBLE = r"\usepackage{amsmath}\usepackage{siunitx}\usepackage{newtxtext,newtxmath}"
+
 def _load_preamble() -> str:
     try:
         return LATEX_PREAMBLE_FILE.read_text()

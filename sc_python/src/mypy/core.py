@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Iterable, Optional
 import io, json, re, sys
 import numpy as np
+from scipy.odr import ODR, RealData, Model
 
 import config as cfg  # expects cfg.DATA_DIR to be a pathlib.Path
 
@@ -26,32 +27,27 @@ DTYPE = np.dtype([(RENAMES[c], "f8") for c in DEFAULT_COLS])
 @dataclass(frozen=True)
 class Measurement:
     """Container for one LHJG Supraleitung .dat file."""
-    source: Path
-    meta: Dict[str, str]
-    data: np.ndarray  # structured array with fields per RENAMES
-
-    time: np.ndarray = field(init=False, repr=False)
-    u_ab: np.ndarray = field(init=False, repr=False)
-    u_p: np.ndarray = field(init=False, repr=False)
-    u_probe: np.ndarray = field(init=False, repr=False)
-    u_spule: np.ndarray = field(init=False, repr=False)
-
+    source:         Path
+    meta:           Dict[str, str]
+    data:           np.ndarray  # structured array with fields per RENAMES
+    time:           np.ndarray =            field(init=False, repr=False)
+    u_ab:           np.ndarray =            field(init=False, repr=False)
+    u_p:            np.ndarray =            field(init=False, repr=False)
+    u_probe:        np.ndarray =            field(init=False, repr=False)
+    u_spule:        np.ndarray =            field(init=False, repr=False)
+    _name_map:      Dict[str, str] =        field(init=False, repr=False)
     # Optionale phys. Größen (werden später/optional gesetzt)
-    druck: Optional[np.ndarray] = field(init=False, repr=False, default=None)
-    kelvin: Optional[np.ndarray] = field(init=False, repr=False, default=None)
-    druck_err: Optional[np.ndarray] = field(init=False, repr=False, default=None)
-    kelvin_err: Optional[np.ndarray] = field(init=False, repr=False, default=None)
-
+    druck:          Optional[np.ndarray] =  field(init=False, repr=False, default=None)
+    kelvin:         Optional[np.ndarray] =  field(init=False, repr=False, default=None)
+    druck_err:      Optional[np.ndarray] =  field(init=False, repr=False, default=None)
+    kelvin_err:     Optional[np.ndarray] =  field(init=False, repr=False, default=None)
     # Optionale Fehler-Views der Spannungen
-    u_ab_err:    Optional[np.ndarray] = field(init=False, repr=False, default=None)
-    u_p_err:     Optional[np.ndarray] = field(init=False, repr=False, default=None)
-    u_probe_err: Optional[np.ndarray] = field(init=False, repr=False, default=None)
-    u_spule_err: Optional[np.ndarray] = field(init=False, repr=False, default=None)
+    u_ab_err:       Optional[np.ndarray] =  field(init=False, repr=False, default=None)
+    u_p_err:        Optional[np.ndarray] =  field(init=False, repr=False, default=None)
+    u_probe_err:    Optional[np.ndarray] =  field(init=False, repr=False, default=None)
+    u_spule_err:    Optional[np.ndarray] =  field(init=False, repr=False, default=None)
 
-
-    _name_map: Dict[str, str] = field(init=False, repr=False)
-
-
+    # --- class-mthods ---
     def __post_init__(self):
         names = list(self.data.dtype.names or ())
         name_map = {n: n for n in names}
@@ -102,8 +98,6 @@ class Measurement:
         # Prefer the embedded source if present, otherwise use the npz path
         src = Path(meta.get("__source__", path))
         return cls(source=src, meta=meta, data=data)
-
-
     # ------- convenient exports -------
     def to_npz(self, path: Path) -> None:
         """Save structured array + metadata JSON into an NPZ."""
@@ -224,7 +218,7 @@ def batch_convert(
     out_dir: Optional[Path] = None,
     write_npz: bool = True, write_csv: bool = False, write_meta_json: bool = True,
     with_voltage_errors: bool=False, range_v=0.1,
-) -> Tuple[int, int]:
+    ) -> Tuple[int, int]:
     """
         Convert all matching .dat files in input_dir (non-recursive) to chosen outputs.
         Returns (found, converted_ok).
@@ -259,7 +253,7 @@ def convert_all_data_dir(
     out_subdir: str = "clean",
     with_voltage_errors: bool=False, range_v=0.1,
     **kw,
-) -> Tuple[int, int]:
+    ) -> Tuple[int, int]:
     """
         Convert all .dat files in cfg.DATA_DIR to cfg.DATA_DIR/out_subdir.
         Extra kwargs forwarded to batch_convert (write_npz, write_csv, write_meta_json).
@@ -312,7 +306,7 @@ def load_its90_table_own(path:str|Path, Dtype:np.dtype|None=DTYPE) -> np.ndarray
     else:
         return np.genfromtxt(path,comments='#',delimiter=',',names=True,autostrip=True)
 
-def load_its90_table_old(path: str | Path, dtype: np.dtype | None = None) -> np.ndarray:
+def load_its90_table_old(path:str|Path, dtype:np.dtype|None=None) -> np.ndarray:
     # Try headered file (your current case)
     try:
         arr = np.genfromtxt(path, delimiter=',', names=True, autostrip=True, comments='#')
@@ -327,7 +321,7 @@ def load_its90_table_old(path: str | Path, dtype: np.dtype | None = None) -> np.
         out['p_kPa'] = data[:, 1]
         return out
 
-def load_its90_table(path: str | Path) -> np.ndarray:
+def load_its90_table(path:str|Path) -> np.ndarray:
     arr = np.genfromtxt(path, delimiter=',', names=True, autostrip=True,
                         comments='#', encoding='utf-8-sig')  # <- BOM-safe
     # drop any blank-line rows that parsed as NaN
@@ -347,7 +341,7 @@ def p_kpa_from_T(T, table:np.ndarray):
     out = np.interp(T, table['T_K'][idx], table['p_kPa'][idx])
     return out if out.ndim else out.item()
 
-def print_struct(table: np.ndarray, stream=sys.stdout, fmt=".6g"):
+def print_struct(table:np.ndarray, stream=sys.stdout, fmt=".6g"):
     """Pretty-print a structured array as a table with headers (pure NumPy)."""
     names = table.dtype.names
     cols = [table[name] for name in names]
@@ -361,6 +355,73 @@ def print_struct(table: np.ndarray, stream=sys.stdout, fmt=".6g"):
     # rows
     for row in zip(*cols):
         print(" ".join(f"{v:{w}{fmt}}" for v, w in zip(row, widths)), file=stream)
+
+def p_from_Up(
+    m:float, dm:float, b:float, db:float, covar:float, 
+    Up:np.ndarray, Up_err:np.ndarray|None=None
+    ) -> tuple[np.ndarray, np.ndarray|None]:
+    """ 
+        Returns a (tuple of ) array(s) with the temperature (and its errors) converted from the 'LHJG__Supraleitung_1'.
+
+        Parameters:
+        - m:        slope,          accuired in callibration.py
+        - dm:       slope-error,    -"-
+        - b:        offset,         -"-
+        - db:       offset-error,   -"-
+        - covar:    joint covariance of slope and offset, see callibration.py
+        - Up:       Array of floats, containing the measured voltage U_ab at the Allain-Bradley resistor
+        - Up_err:   Array with the uncertainties/confidences for the Up-points
+
+        Returns:
+        - tuple[Pressure,Pressure_error] [in bar]
+        m * Up +b , np.sqrt((m*Up_err)**2 + (dm*Up)**2 + db**2 + 2*Up*covar)
+    """
+    p = m*Up + b
+    if Up_err is None:
+        return p
+    return p, np.sqrt((m*Up_err)**2 + (dm*Up)**2 + db**2 + 2*Up*covar)
+    # Put this next to your existing code (same module is fine)
+
+def build_T_from_p_interpolator(
+    T_tab: np.ndarray,
+    p_tab: np.ndarray,
+    ):
+    """
+    Build a monotone p->T interpolator and its derivative dT/dp
+    from an ITS-90 table (T_tab in K, p_tab in SAME units you will query with).
+    """
+    # Sort by pressure (strictly increasing for vapor pressure)
+    idx = np.argsort(p_tab)
+    p_sorted = p_tab[idx]
+    T_sorted = T_tab[idx]
+    # Monotone shape-preserving cubic (no overshoot -> stable inverse)
+    T_of_p = PchipInterpolator(p_sorted, T_sorted, extrapolate=False)
+    dTdp   = T_of_p.derivative()
+    return T_of_p, dTdp, p_sorted.min(), p_sorted.max()
+
+def T_from_p_with_errors(
+    p: np.ndarray,
+    dp: np.ndarray,
+    T_of_p: PchipInterpolator,
+    dTdp: PchipInterpolator,
+    p_min: float,
+    p_max: float,
+    clip: bool = True,
+    ):
+    """
+        Evaluate T(p) and propagate errors: dT = |dT/dp| * dp.
+        If clip=True, values slightly outside the table are clipped to [p_min,p_max].
+    """
+    p_query = p.copy()
+    if clip:
+        p_query = np.clip(p_query, p_min, p_max)
+    else:
+        # Optionally warn or mask outside points:
+        if np.any((p < p_min) | (p > p_max)):
+            raise ValueError("Some pressures fall outside the ITS-90 table range.")
+    T  = T_of_p(p_query)
+    dT = np.abs(dTdp(p_query)) * dp
+    return T, dT
 
 ITS90_STRUCT = load_its90_table_orig(cfg.MYPY/'ITS90.csv')
 
@@ -438,7 +499,7 @@ def predict_y_with_uncertainty(x0, m, c, s_m, s_c, cov_mc):
 
 
 # ------------------------- saving/loading helpers ----------------------------
-def results_to_df(results: dict[str, dict[str, float]]) -> pd.DataFrame:
+def results_to_df(results:dict[str,dict[str,float]]) -> pd.DataFrame:
     # stable row order
     items = sorted(results.items())
     idx   = [k for k, _ in items]
@@ -447,7 +508,7 @@ def results_to_df(results: dict[str, dict[str, float]]) -> pd.DataFrame:
     df.index.name = "key"
     return df
 
-def save_results(results: dict[str, dict[str, float]], path:str|Path, fmt:str="csv"):
+def save_results(results:dict[str,dict[str,float]], path:str|Path, fmt:str="csv"):
     path = Path(path)
     df = results_to_df(results)
 
@@ -463,7 +524,7 @@ def save_results(results: dict[str, dict[str, float]], path:str|Path, fmt:str="c
     else:
         raise ValueError(f"Unknown format: {fmt}")
 
-def load_results(path: str | Path):
+def load_results(path:str|Path):
     path = Path(path)
     suf = path.suffix.lower()
     if suf == ".csv":
@@ -479,3 +540,48 @@ def load_results(path: str | Path):
         return df.to_dict(orient="index")
     else:
         raise ValueError(f"Don’t know how to load {path}")
+
+
+#  odr
+
+def _line(beta, x):
+    m, b = beta
+    return m*x + b
+
+def odr_line(x, y, sx, sy, m0=None, b0=None, maxit=200):
+    """
+    ODR fit of y = m*x + b with errors in x and y.
+    Returns dict(m,b,sm,sb,cov,rchi2,out).
+    """
+    x = np.asarray(x, float);   y = np.asarray(y, float)
+    sx = np.asarray(sx, float); sy = np.asarray(sy, float)
+
+    # avoid zero/neg errors
+    tiny = np.finfo(float).tiny
+    sx = np.where(sx > 0, sx, tiny)
+    sy = np.where(sy > 0, sy, tiny)
+
+    if m0 is None or b0 is None:
+        # decent initial guess
+        m0, b0 = np.polyfit(x, y, 1, w=1.0/np.where(sy>0, sy, 1.0))
+
+    data  = RealData(x, y, sx=sx, sy=sy)
+    model = Model(_line)
+    odr   = ODR(data, model, beta0=[m0, b0], maxit=maxit)
+    out   = odr.run()
+
+    m, b       = out.beta
+    sm, sb     = out.sd_beta
+    cov        = out.cov_beta      # parameter covariance (consistent with sd_beta)
+    rchi2      = out.res_var       # ~ reduced chi^2
+    return dict(m=m, b=b, sm=sm, sb=sb, cov=cov, rchi2=rchi2, out=out)
+
+def odr_prediction_band(xgrid, m, b, cov):
+    """
+    1σ band from parameter covariance.
+    var(ŷ) = [x 1] Σ [x 1]^T
+    """
+    xgrid = np.asarray(xgrid, float)
+    A = np.vstack([xgrid, np.ones_like(xgrid)]).T
+    var = np.einsum('ij,jk,ik->i', A, cov, A)
+    return m*xgrid + b, np.sqrt(np.maximum(var, 0.0))
