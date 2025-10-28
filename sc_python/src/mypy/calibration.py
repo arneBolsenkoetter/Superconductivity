@@ -7,9 +7,11 @@ import core
 import numpy as np
 import sympy as sp
 import config as cfg
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy.polynomial.polynomial as poly
 
+from jax import grad, jit, vmap
 from core import T_from_p_kpa, p_kpa_from_T, ITS90_STRUCT
 from scipy import odr
 from config import figrect
@@ -26,7 +28,6 @@ this_file_path = Path(__file__).resolve()
 print(cfg.user_stripped(this_file_path))
 this_file_name = this_file_path.stem
 print(this_file_name)
-# if not cfg.breaker():   sys.exit(0)
 
 
 # --------------------------------- ITS90 functions ------------------------------------
@@ -57,7 +58,11 @@ TABLEIII = cfg.attrmap({# available at https://www.bipm.org/documents/20126/4179
     }
 })
 
-def T90(p:np.ndarray, a0:float, ai:np.ndarray, b:float, c:float, units:str|None='Pa', checkmate:bool=False) -> np.ndarray:
+def T90(
+    p:jnp.ndarray,
+    a0:float, ai:jnp.ndarray, b:float, c:float,
+    units:str|None='Pa', checkmate:bool=False,
+) -> jnp.ndarray:
     """
         !!! 
         CAUTION: Only valid for the range of 1.25K to 2.1768K and 2.1768K to 5.0K!
@@ -66,18 +71,18 @@ def T90(p:np.ndarray, a0:float, ai:np.ndarray, b:float, c:float, units:str|None=
         Official documentation:    https://its-90.com/definitions/!
         Computes the temperatures T90 for (an array of) pressures p.
 
-            T90  =  A0 + Σ[Ai*ln(p)*B/C]^i (i=1,i=15)
+            T90  =  A0 + Σ[Ai*(ln(p)-B)/C]^i (i=1,i=15)
 
         Parameters:
-        p:      np.ndarray((N,),float),         1D array of pressures
+        p:      jnp.ndarray((N,),float),        1D array of pressures
         a0:     float,                          some parameter, apparently on the its-90 website, but couldn't find it
-        ai:     np.ndarray((15,),float),        1D array of parameters for the sum over i
+        ai:     jnp.ndarray((m,),float),        1D array of parameters for the sum over i
         b:      float,                          the same applys as for a0
         c:      float,                          -"-
         units:  string='bar'|'Pa'|'kPa'|'hPa',  units of the pressures parsed hereto T90(p,...)
 
         Returns:
-        T90:    np.ndarray((N,),float),         temperatures corresponding to parsed pressures
+        T90:    jnp.ndarray((N,),float),         temperatures corresponding to parsed pressures
 
         P.S.:   First make sure you have converted your pressures to [Pa], then simply set the flag 'HaveUcheckedtheUnitQuestionmark'=True
         P.P.S:  Unit conversions:
@@ -85,18 +90,47 @@ def T90(p:np.ndarray, a0:float, ai:np.ndarray, b:float, c:float, units:str|None=
             1hPa = 10000Pa  <-> 1Pa = 1e-4 hPa
             1kPa = 1000Pa   <-> 1Pa = 13-3 kPa
     """
-    if not checkmate:
-        raise ValueError("The pressure parsed to HE4_T90_over_vapour_pressure might have the wrong unit.\nCheck out this function's doc-string (<function>.__doc__) AND its definition to see how you can avoid this captcha.")
-    if units=='bar':    p = np.asarray(p,float)*1e5
-    elif units=='hPa':  p = np.asarray(p,float)*1e4
-    elif units=='kPa':  p = np.asarray(p,float)*1e3
-    elif units=='Pa':   p = np.asarray(p,float)
-    else:               raise ValueError("ValueError - 'units' must be one of:   'bar' | 'hPa' | 'kPa' | 'Pa'.")
-    ai = np.asarray(ai,float)
-    # --- actual computation:
-    x = (np.log(p)-b)/c
-    powers = x[:,None]**np.arange(1,len(ai)+1)
-    return a0 + powers @ ai
+    if not checkmate:   raise ValueError("The pressure parsed to HE4_T90_over_vapour_pressure might have the wrong unit.\nCheck out this function's doc-string (<function>.__doc__) AND its definition to see how you can avoid this captcha.")
+    if      units=='bar':   p = jnp.asarray(p,float)*1e5
+    elif    units=='hPa':   p = jnp.asarray(p,float)*1e4
+    elif    units=='kPa':   p = jnp.asarray(p,float)*1e3
+    elif    units=='Pa':    p = jnp.asarray(p,float)
+    else:   raise ValueError("ValueError - 'units' must be one of:   'bar' | 'hPa' | 'kPa' | 'Pa'.")
+    return jnp.vectorize(lambda pp: T90jax(pp,a0,ai,b,c))(p)
+
+def T90jax(
+    p:jnp.ndarray,
+    a0: float, ai:jnp.ndarray, b:float, c:float,
+)   -> jnp.ndarray:
+    """
+        jax.numpy definition for the Temperature dependency of the pressure.
+    """
+    p = jnp.asarray(p,float)
+    ai = jnp.asarray(ai,float)
+    x = (jnp.log(p)-b)/c
+    coeffs = jnp.concatenate([ai[::-1],jnp.array([a0])])
+    return jnp.polyval(coeffs,x)
+
+def dT90jax(
+    p:jnp.ndarray,  dp:jnp.ndarray,
+    a0:float, ai:jnp.ndarray, b:float, c:float,
+)   -> jnp.ndarray:
+    derivative = jit(grad(T90jax,argnums=0))
+    sigmas = jnp.vectorize(lambda pp: derivative(pp,a0,ai,b,c))(p)
+    return sigmas*dp
+
+def dT90(
+    p:jnp.ndarray, dp:jnp.ndarray,
+    a0:float, ai:jnp.ndarray, b:float, c:float,
+    units:str|None='Pa', checkmate:bool=False,
+)   -> jnp.ndarray:
+    if not checkmate:   raise ValueError("The pressure parsed to HE4_T90_over_vapour_pressure might have the wrong unit.\nCheck out this function's doc-string (<function>.__doc__) AND its definition to see how you can avoid this captcha.")
+    if      units=='bar':   p = jnp.asarray(p,float)*1e5
+    elif    units=='hPa':   p = jnp.asarray(p,float)*1e4
+    elif    units=='kPa':   p = jnp.asarray(p,float)*1e3
+    elif    units=='Pa':    p = jnp.asarray(p,float)
+    else:   raise ValueError("ValueError - 'units' must be one of:   'bar' | 'hPa' | 'kPa' | 'Pa'.")
+    return dT90jax(p,dp,a0,ai,b,c)
 
 def linear_p_from_Up(
     m:float, dm:float, b:float, db:float, covar:float, 
@@ -188,35 +222,6 @@ dY_dg = sp.lambdify((alpha_,beta_,gamma_,T_),dY_dg,'numpy')
 
 
 # ------------------------------ functions for odr-fit ---------------------------------
-# def mdl_shockley(params,T):
-#     alpha,beta,gamma = params
-#     return alpha + beta*np.exp((-1)*gamma*T)
-
-# def mdl_jacobean_params(params,T):
-#     a,b,g = params
-#     e = np.exp(-g*T)
-#     J = np.vstack([np.ones_like(T),e,-b*T*e])
-#     return J[None,:,:]                          # odr expects shape (1,p,N)
-
-# def mdl_jacobean_variables(params,T):
-#     a,b,g = params
-#     d = -b*g*np.exp(-g*T)
-#     return d[None,None,:]
-
-# def fit_odr(mdl, beta0, T, U, sT, sU, maxit=200):
-#     data = odr.RealData(T, U, sx=np.maximum(sT, eps), sy=np.maximum(sU, eps))
-#     model = odr.Model(lambda b, x: mdl(b, x))
-#     out = odr.ODR(data, model, beta0=beta0, maxit=maxit).run()
-#     beta = out.beta
-#     cov  = out.cov_beta
-#     # compute plain RSS in U for AIC comparison
-#     Uhat = mdl(beta, T)
-#     rss  = float(np.sum((U - Uhat)**2))
-#     k    = len(beta)
-#     n    = len(T)
-#     aic  = 2*k + n*np.log(rss/n) if rss > 0 else -np.inf
-#     return dict(beta=beta, cov=cov, rss=rss, aic=aic, out=out)
-
 def mdl_shockley(params,T,use_theta:bool=True):
     if use_theta:
         a,b,th = params
@@ -244,8 +249,8 @@ def mdl_jacobean_variables(params,T,use_theta:bool=True):
     if use_theta:
         a,b,th = params
         g = np.exp(th)
-    else: a,b,g = params
-    a,b,g = params
+    else:
+        a,b,g = params
     d = -b*g*np.exp(-g*T)
     return d[None,None,:]
 
@@ -295,6 +300,7 @@ cfg.export_final=False
 cfg.configure(overrides={'lines.linewidth':0.6})
 
 
+# -------------------------------------------------- main workflow -----------------------------------------------------
 # get parameters for fit between pressure and voltage (Druck_Spaunung_KOrrelation.py)
 # --- linear fit: Pressure = m * Voltage + b (weighted by y-errors) ---
 x  = npDV['volts'].astype(float)
@@ -303,16 +309,16 @@ y  = npDV['druck'].astype(float)
 sy = npDV['druck_err'].astype(float)
 
 # keep only finite points
-mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(sy) & (sy > 0)
+mask =  np.isfinite(x) & np.isfinite(y) & np.isfinite(sy) & (sy > 0)
 x, sx, y, sy = x[mask], sx[mask], y[mask], sy[mask]
 
 # Weighted least squares with NumPy (weights = 1/sigma_y)
 # global m,b,var_m,m_err,var_b,b_err,covar,varco
 (m, b), cov = np.polyfit(x, y, deg=1, w=1.0/sy, cov=True)
 
-odr_res = core.odr_line(x,y,sx,sy)
-xx=np.linspace(x.min(),x.max(),512)
-pp,spp=core.odr_prediction_band(xx,odr_res['m'],odr_res['b'],odr_res['cov'])
+odr_res =   core.odr_line(x,y,sx,sy)
+xx =        np.linspace(x.min(),x.max(),512)
+pp,spp =    core.odr_prediction_band(xx,odr_res['m'],odr_res['b'],odr_res['cov'])
 
 odr_inv = core.odr_line(y,x,sy,sx)
 yy=np.linspace(y.min(),y.max(),512)
@@ -325,20 +331,82 @@ varco = cov[1,0]
 m_err, b_err = np.sqrt(np.diag(cov))
 
 # for export:
-slope=m
-slope_var=var_m
-slope_err=m_err
-offset=b
-offset_var=var_b
-offset_err=b_err
+slope =     m
+slope_var = var_m
+slope_err = m_err
+offset =    b
+offset_var = var_b
+offset_err = b_err
 
 
+# --------------------------- get preassure p_p from Up --------------------------------
+m1 = Measurement.from_npz(cfg.DATA_DIR/"clean/LHJG__Supraleitung_1.npz")
+print(m1.columns)
 
-# -------------------------------------------------- main workflow -----------------------------------------------------
+# ----- 1) Get temperature-pressure correlation from the ITS90.csv -----
+T_tab_K   = ITS90_STRUCT['T_K'].astype(float)
+p_tab_kPa = ITS90_STRUCT['p_kPa'].astype(float)     # ITS90.csv is in kPa -> conversion:
+                                                    # 1 bar = 100000 Pa
+                                                    # kPa -> bar  : multiply by 0.01
+                                                    # bar -> kPa  : multiply by 100.0
+p_tab_bar = p_tab_kPa * 0.01
+# ----- 2) compute pressures according to linear fit -----
+p,dp = linear_p_from_Up(
+    Up=m1.u_p,Up_err=m1.u_p_err,
+    m=odr_res['m'],dm=odr_res['sm'],
+    b=odr_res['b'],db=odr_res['sb'],
+    covar=np.sqrt((odr_res['cov'][0,1])**2),
+)
+
+# --- defining mask so interpolation doesn't look outside the table ---
+tab_mask = (p>=p_tab_bar.min())&(p<=p_tab_bar.max())
+U = m1.u_ab[tab_mask];  dU = m1.u_ab_err[tab_mask]
+p = p[tab_mask];        dp = dp[tab_mask]
+# --- separating mask for super- and normal-fluid ---
+sf_mask = (p<5.207*1e-2)
+nf_mask = (p>4.836*1e-2)
+both = sf_mask&nf_mask
+sf_only = sf_mask & ~both
+nf_only = nf_mask & ~both
+# --- applying the masks ---
+p_sf = p[sf_mask];  dp_sf = dp[sf_mask]
+p_nf = p[nf_mask];  dp_nf = dp[nf_mask]
+U_sf = U[sf_mask];  dU_sf = dU[sf_mask]
+U_nf = U[nf_mask];  dU_nf = dU[nf_mask]
+
+# ----- 3) Compute Temperatures -----
+Tnf_full = np.empty_like(p);    dTnf_full = np.empty_like(dp)
+Tnf_full[nf_mask] = T90(p_nf, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C, units='bar', checkmate=True);   dTnf_full[nf_mask] = dT90(p_nf, dp_nf, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C, units='bar', checkmate=True)
+# Tnf_full[nf_mask] = TUAB(U_nf,m,b, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C); dTnf_full[nf_mask] = dTUAB(U_nf,dU_nf,m,m_err,b,b_err, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C)
+
+Tsf_full = np.empty_like(p);    dTsf_full = np.empty_like(dp)
+Tsf_full[sf_mask] = T90(p_sf, TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C, units='bar', checkmate=True);   dTsf_full[sf_mask] = dT90(p_sf, dp_sf, TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C, units='bar', checkmate=True)
+# Tsf_full[sf_mask] = TUAB(U_sf,m,b, TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C)
+# dTsf_full[sf_mask] = dTUAB(U_sf,dU_sf,m,m_err,b,b_err,TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C)
+
+# ----- 4) broadcast onlo shared array -----
+w_sf = np.zeros_like(p);    w_sf[sf_mask] = 1/dTsf_full[sf_mask]**2
+w_nf = np.zeros_like(p);    w_nf[nf_mask] = 1/dTnf_full[nf_mask]**2
+wsum = w_sf+w_nf
+T = np.empty_like(p);   dT = np.empty_like(dp)
+T[sf_only] = Tsf_full[sf_only];     dT[sf_only] = dTsf_full[sf_only]
+T[nf_only] = Tnf_full[nf_only];     dT[nf_only] = dTnf_full[nf_only]
+T[both] = (w_sf[both]*Tsf_full[both] + w_nf[both]*Tnf_full[both])/wsum[both];   dT[both] = np.sqrt(dTsf_full[both]**2 + dTnf_full[both]**2)
+
+mask_sfit = (1.73<=T)&(T<=2.17)
+mask_nfit = (T>=2.18)&(T<=4.2)
+Usfit = U[mask_sfit];   dUsfit = dU[mask_sfit]
+Tsfit = T[mask_sfit];   dTsfit = sT[mask_sfit]
+Unfit = U[mask_nfit];   dUnfit = dU[mask_nfit]
+Tnfit = T[mask_nfit];   dTnfit = dT[mask_nfit]
+
+sfit = 
+
+
 if __name__=="__main__":
 
     initial_tests = False
-    # --- only some checks, from the early stages of this script ---
+    # --- some checks, from the early stages of this script ---
     if initial_tests:
         print(m)
         print(odr_res['m'])
@@ -419,23 +487,6 @@ if __name__=="__main__":
             plt.show()
             # plt.close()
 
-
-    # ------------------------ get preassure p_p from Up -------------------------------
-    m1 = Measurement.from_npz(cfg.DATA_DIR/"clean/LHJG__Supraleitung_1.npz")
-    print(m1.columns)
-
-    p_bar, dp_bar = linear_p_from_Up(
-        Up=m1.u_p, Up_err=m1.u_p_err,
-        m=m, dm=m_err, 
-        b=b, db=b_err, 
-        covar=covar,
-    )
-    p,dp = linear_p_from_Up(
-        Up=m1.u_p,Up_err=m1.u_p_err,
-        m=odr_res['m'],dm=odr_res['sm'],
-        b=odr_res['b'],db=odr_res['sb'],
-        covar=np.sqrt((odr_res['cov'][0,1])**2),
-    )
     show_pressure=False
     if show_pressure:
         pressure_fig,pressure_ax=plt.subplots(nrows=1,ncols=2,figsize=figrect(ncols=2))
@@ -455,74 +506,49 @@ if __name__=="__main__":
         pressure_ax[0].set_ylabel(r'Pressure $P$')
         plt.show()
 
-
-    # --------------------- get temp t_p from preassure p_p ----------------------------
-    # ----- 1) Get temperature-pressure correlation from the ITS90.csv -----
-    T_tab_K   = ITS90_STRUCT['T_K'].astype(float)
-    p_tab_kPa = ITS90_STRUCT['p_kPa'].astype(float)     # ITS90.csv is in kPa -> conversion:
-                                                        # 1 bar = 100000 Pa
-                                                        # kPa -> bar  : multiply by 0.01
-                                                        # bar -> kPa  : multiply by 100.0
-    p_tab_bar = p_tab_kPa * 0.01
+    print(len(T))
+    print(len(T[sf_only]))
+    print(len(T[nf_only]))
+    print(len(T[both]))
+    print(f'{"Checksum:":<10}{len(T):4}=={len(T[sf_only]):>4}+{len(T[both]):4}+{len(T[nf_only]):<4}','...',bool(len(T)==len(T[sf_only])+len(T[both])+len(T[nf_only])))
 
     # ----- 1.1)[detour]: fit ITS90 -----
-    detour = True
-    if detour:
-        show_c=True
-        if show_c:
-            cfig,cax=plt.subplots(nrows=1,ncols=1,figsize=figrect())
-            c1 = cax.plot(
-                p_tab_bar,T_tab_K,
-                label=r'ITS90-calibration',
-            )
-            xx = np.linspace(p_tab_bar.min(),p_tab_bar.max(),1024)
-            whole_range = True
-            if whole_range:     xxHE3=xx;   xxHE4sf=xx;     xxHE4nf=xx
-            else:
-                xxHE3 =     np.linspace(TABLEIII.HE3.valid_p[0], TABLEIII.HE3.valid_p[1],512)*1e-2
-                xxHE4sf =   np.linspace(TABLEIII.HE4_sf.valid_p[0], TABLEIII.HE4_sf.valid_p[1],512)*1e-2
-                xxHE4nf =   np.linspace(TABLEIII.HE4_nf.valid_p[0], TABLEIII.HE4_nf.valid_p[1],512)*1e-2
+    show_c = False
+    if show_c:
+        cfig,cax=plt.subplots(nrows=1,ncols=1,figsize=figrect())
+        c1 = cax.plot(
+            p_tab_bar,T_tab_K,
+            label=r'ITS90-calibration',
+        )
+        xx = np.linspace(p_tab_bar.min(),p_tab_bar.max(),1024)
+        whole_range = True
+        if whole_range:     xxHE3=xx;   xxHE4sf=xx;     xxHE4nf=xx
+        else:
+            xxHE3 =     np.linspace(TABLEIII.HE3.valid_p[0], TABLEIII.HE3.valid_p[1],512)*1e-2
+            xxHE4sf =   np.linspace(TABLEIII.HE4_sf.valid_p[0], TABLEIII.HE4_sf.valid_p[1],512)*1e-2
+            xxHE4nf =   np.linspace(TABLEIII.HE4_nf.valid_p[0], TABLEIII.HE4_nf.valid_p[1],512)*1e-2
 
-            # yyHE3 =     T90(xxHE3, TABLEIII.HE3.A0, TABLEIII.HE3.Ai, TABLEIII.HE3.B, TABLEIII.HE3.C, units='bar', checkmate=True)
-            # c2 =        cax.plot(xx,yyHE3,  label=r'$T_{90}$ for $^{3}$HE')
-            yyHE4sf =   T90(xxHE4sf, TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C, units='bar', checkmate=True)
-            c3 =        cax.plot(xx,yyHE4sf,label=r'$T_{90}$ for $^{4}$HE - superfluid')
-            yyHE4nf =   T90(xxHE4nf, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C, units='bar', checkmate=True)
-            c4 =        cax.plot(xx,yyHE4nf,label=r'$T_{90}$ for $^{3}$HE - normalfluid')
+        # yyHE3 =     T90(xxHE3, TABLEIII.HE3.A0, TABLEIII.HE3.Ai, TABLEIII.HE3.B, TABLEIII.HE3.C, units='bar', checkmate=True)
+        # c2 =        cax.plot(xx,yyHE3,  label=r'$T_{90}$ for $^{3}$HE')
+        yyHE4sf =   T90(xxHE4sf, TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C, units='bar', checkmate=True)
+        c3 =        cax.plot(xx,yyHE4sf,label=r'$T_{90}$ for $^{4}$HE - superfluid')
+        yyHE4nf =   T90(xxHE4nf, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C, units='bar', checkmate=True)
+        c4 =        cax.plot(xx,yyHE4nf,label=r'$T_{90}$ for $^{3}$HE - normalfluid')
 
-            cax.set_ylim(1.0,T_tab_K.max())
-            cax.set_xlabel(r'Pressure $P\quad[\mathrm{bar}]$')
-            cax.set_ylabel(r'Temperature $T\quad[\mathrm{K}]$')
-            cax.legend()
-            plt.show()
+        cax.set_ylim(1.0,T_tab_K.max())
+        cax.set_xlabel(r'Pressure $P\quad[\mathrm{bar}]$')
+        cax.set_ylabel(r'Temperature $T\quad[\mathrm{K}]$')
+        cax.legend()
+        plt.show()
 
-    # --- defining mask so interpolation doesn't look outside the table ---
-    tab_mask = (p>=p_tab_bar.min())&(p<=p_tab_bar.max())
-    sf_mask = tab_mask&(p<5.207*1e-2)
-    nf_mask = tab_mask&(p>4.836*1e-2)
-    # --- applying the masks ---
-    p_bar=p_bar[tab_mask];  dp_bar=dp_bar[tab_mask]
-    p_sf = p[sf_mask];      dp_sf = dp[sf_mask]
-    p_nf = p[nf_mask];      dp_nf = dp[nf_mask]
-    p = p[tab_mask];        dp = dp[tab_mask]
-    U = m1.u_ab[tab_mask];  dU = m1.u_ab_err[tab_mask]
-    # --- interpolating the temperature ---
-    dT_method = 'asym'
-    T,dT = interp_with_grid_error(p_tab_bar,T_tab_K,p,dp,err_mode=dT_method)
-    # --- calculating the temperature ---
-    Tsf = T90(p_sf, TABLEIII.HE4_sf.A0, TABLEIII.HE4_sf.Ai, TABLEIII.HE4_sf.B, TABLEIII.HE4_sf.C, units='bar', checkmate=True)
-    Tnf = T90(p_nf, TABLEIII.HE4_nf.A0, TABLEIII.HE4_nf.Ai, TABLEIII.HE4_nf.B, TABLEIII.HE4_nf.C, units='bar', checkmate=True)
-
-
-
-    # --- little figure of pressure p and voltage U_AB over temperature T ---
-    show_d=True
+    # --- figure of pressure p and voltage U_AB over temperature T ---
+    show_d=False
     if show_d:
         dfig,dax = plt.subplots(ncols=1,nrows=1,figsize=figrect())
         dsecax = dax.twinx()
         d1 = dax.errorbar(x=Tsf,y=p_sf,yerr=dp_sf,label=r'$T_{90}$ superfluid')
         d2 = dax.errorbar(x=Tnf,y=p_nf,yerr=dp_nf,label=r'$T_{90}$ normalfluid')
-        dsec1 = dsecax.errorbar(x=T,xerr=dT,y=U,yerr=dU,label=r'Voltage $U_\mathrm{AB}$')
+        dsec1 = dsecax.errorbar(x=T,y=U,yerr=dU,label=r'Voltage $U_\mathrm{AB}$')
         # labels = [dax.get_labels(),dsexax.get_labels()]
         # handles = [dax.get_handles(),dsecax.get_handles()]
         dax.legend()
@@ -531,6 +557,15 @@ if __name__=="__main__":
         dax.set_xlabel(r'Temperature $T\quad[\mathrm{K}]$')
         dax.set_ylabel(r'Pressure $P(U_\mathrm{P})\quad[\mathrm{bar}]$')
         dsecax.set_ylabel(r'Voltage $U_\mathrm{AB}\quad[\mathrm{V}]$')
+        plt.show()
+        pltexit()
+
+    # --- figure of temperature over U_AB ---
+    show_e = True
+    if show_e:
+        efig,eax = plt.subplots(ncols=1,nrows=1,figsize=figrect())
+        e1 = eax.errorbar(x=U,xerr=dU,y=T,yerr=dT)
+        eax.set_xlabel(r"Voltage [V]")
         plt.show()
         pltexit()
 
@@ -548,7 +583,7 @@ if __name__=="__main__":
     T_sf, U_sf, sU_sf = T[mask_superfluid],  U[mask_superfluid],  dU[mask_superfluid]
     T_nf, U_nf, sU_nf = T[mask_normalfluid], U[mask_normalfluid], dU[mask_normalfluid]
     # --- special treatment for the errors in T ---
-    if dT_method is 'asym': sT_sf = dT[:,mask_superfluid];  sT_nf = dT[:,mask_normalfluid]
+    if dT_method == 'asym': sT_sf = dT[:,mask_superfluid];  sT_nf = dT[:,mask_normalfluid]
     else:                   sT_sf = dT[mask_superfluid];    sT_nf = dT[mask_normalfluid]
     # ODR need symmetric errors:
     sT_sf = np.maximum(sT_sf[0,:],sT_sf[1,:]);  sT_nf = np.maximum(sT_nf[0,:],sT_nf[1,:])
@@ -559,7 +594,7 @@ if __name__=="__main__":
         fcn=lambda beta, x: mdl_shockley(beta, x),
         fjacb=mdl_jacobean_params,
         fjacd=mdl_jacobean_variables
-        )
+    )
     data_sf = RealData(x=T_sf,y=U_sf,sx=sT_sf,sy=sU_sf);    data_nf = RealData(x=T_nf,y=U_nf,sx=sT_nf,sy=sU_nf)
     odr_sf = odr.ODR(data_sf,shockley_model,beta0=init_params_sf,maxit=300)
     odr_nf = odr.ODR(data_nf,shockley_model,beta0=init_params_nf,maxit=300)
