@@ -621,67 +621,189 @@ def _pick_spread_indices(n, k):
 # print("nfwhy  =", nfout.stopreason)  # convergence info
 
 # -----------------------------------------------------------------------------
-def estimate_beta0_exp_offset(x, y, n_triples=20, g_bounds=None):
+# def estimate_beta0_exp_offset(x, y, n_triples=20, g_bounds=None):
+#     x = np.asarray(x, float)
+#     y = np.asarray(y, float)
+#     assert x.ndim == y.ndim == 1 and x.size == y.size and x.size >= 3
+
+#     # sort and center
+#     idx = np.argsort(x)
+#     x, y = x[idx], y[idx]
+#     T0 = np.median(x)
+#     xc = x - T0
+
+#     # span-based bounds for c on centered axis
+#     dx = xc[-1] - xc[0]
+#     dx = dx if dx > 0 else 1.0
+#     if g_bounds is None:
+#         g_bounds = (1e-6/dx, 1e6/dx)
+
+#     # triples as before, but on xc
+#     k = max(5, min(xc.size, int(np.sqrt(max(n_triples*3, 9)))))
+#     pts = _pick_spread_indices(xc.size, k)
+#     triples = [(pts[i], pts[i+1], pts[i+2]) for i in range(len(pts)-2)] or \
+#               [(i, i+1, i+2) for i in range(xc.size-2)]
+
+#     g_list = []
+#     for (i1,i2,i3) in triples:
+#         g_hat = _estimate_g_from_triple(xc[i1], y[i1], xc[i2], y[i2], xc[i3], y[i3], g_bounds)
+#         if np.isfinite(g_hat):
+#             g_list.append(g_hat)
+
+#     g0 = float(np.median(g_list)) if len(g_list) else 1.0/max(dx, 1.0)
+
+#     # linear least squares for a and b~ on centered axis
+#     Phi = np.column_stack([np.ones_like(xc), np.exp(-g0 * xc)])
+#     ab, *_ = np.linalg.lstsq(Phi, y, rcond=None)
+#     a0, btil0 = ab
+#     return np.array([a0, btil0, g0]), T0  # return T0 so the caller knows the centering
+
+# (sfbeta0,sfT0) = estimate_beta0_exp_offset(Tsfit,Usfit)
+# (nfbeta0,nfT0) = estimate_beta0_exp_offset(Tnfit,Unfit)
+
+# sfmodel = Model(*make_centered_model(sfT0))
+# nfmodel = Model(*make_centered_model(nfT0))
+
+# sfdata = RealData(Tsfit,Usfit,dTsfit,dUsfit)
+# nfdata = RealData(Tnfit,Unfit,dTnfit,dUnfit)
+
+# sfout = ODR(sfdata,sfmodel,beta0=sfbeta0).run()
+# nfout = ODR(nfdata,nfmodel,beta0=nfbeta0).run()
+
+# sfa, sfbtil, sfc = sfout.beta
+# nfa, nfbtil, nfc = nfout.beta
+# sfb = sfbtil * np.exp(+sfc * sfT0)
+# nfb = nfbtil * np.exp(+nfc * nfT0)
+
+# print("sfbeta =", np.asarray([sfa,sfb,sfc]))        # [a, b, g]
+# print("sfsd   =", sfout.sd_beta)     # 1σ parameter uncertainties
+# print("sfwhy  =", sfout.stopreason)  # convergence info
+
+# print("nfbeta =", np.asarray([nfa,nfb,nfc]))        # [a, b, g]
+# print("nfsd   =", nfout.sd_beta)     # 1σ parameter uncertainties
+# print("nfwhy  =", nfout.stopreason)  # convergence info
+
+# -----------------------------------------------------------------------------
+def _safe_exp_neg(g, xc):
+    # Keep |g*xc| within a safe window to avoid overflow/underflow.
+    # 709 ~ log(np.finfo(float).max). Use a safety margin.
+    LIM = 680.0
+    z = np.exp(-np.clip(g * xc, -LIM, LIM))
+    return z
+
+def estimate_beta0_exp_offset(x, y, g_bounds=None, ridge=0.0):
+    """
+    Robust, assumption-light initializer for y = a + b*exp(-g*x)
+    Returns ( [a0, btil0, g0], T0 ) with centered x (x_c = x - T0).
+    """
     x = np.asarray(x, float)
     y = np.asarray(y, float)
     assert x.ndim == y.ndim == 1 and x.size == y.size and x.size >= 3
 
-    # sort and center
+    # sort & center
     idx = np.argsort(x)
     x, y = x[idx], y[idx]
-    T0 = np.median(x)
+    T0 = float(np.median(x))
     xc = x - T0
+    xmax = float(np.max(np.abs(xc))) if x.size else 1.0
+    dx = float(np.ptp(xc)) or 1.0
 
-    # span-based bounds for c on centered axis
-    dx = xc[-1] - xc[0]
-    dx = dx if dx > 0 else 1.0
+    # sensible, data-driven bounds for g
+    # lower: nearly flat across span; upper: avoid overflow and absurdly steep decays
     if g_bounds is None:
-        g_bounds = (1e-6/dx, 1e6/dx)
+        g_low  = 1e-6 / dx
+        g_overflow_cap = 0.5 * 709.0 / max(xmax, 1e-12)   # keep |g*xc| <= ~354
+        g_high = min(1e6 / dx, g_overflow_cap)
+        g_bounds = (g_low, max(g_high, g_low*10))
 
-    # triples as before, but on xc
-    k = max(5, min(xc.size, int(np.sqrt(max(n_triples*3, 9)))))
-    pts = _pick_spread_indices(xc.size, k)
-    triples = [(pts[i], pts[i+1], pts[i+2]) for i in range(len(pts)-2)] or \
-              [(i, i+1, i+2) for i in range(xc.size-2)]
+    # Objective: for a given g, solve a,b~ by scaled lstsq on [1, exp(-g*xc)]
+    def rss_for_g(g):
+        z = _safe_exp_neg(g, xc)
+        Phi = np.column_stack([np.ones_like(xc), z])
 
-    g_list = []
-    for (i1,i2,i3) in triples:
-        g_hat = _estimate_g_from_triple(xc[i1], y[i1], xc[i2], y[i2], xc[i3], y[i3], g_bounds)
-        if np.isfinite(g_hat):
-            g_list.append(g_hat)
+        # column scaling -> better conditioning
+        col_scale = np.linalg.norm(Phi, axis=0)
+        col_scale[col_scale == 0] = 1.0
+        Phi_s = Phi / col_scale
 
-    g0 = float(np.median(g_list)) if len(g_list) else 1.0/max(dx, 1.0)
+        try:
+            if ridge > 0:
+                # (Phi_s^T Phi_s + λI) ab_s = Phi_s^T y
+                ATA = Phi_s.T @ Phi_s
+                ATy = Phi_s.T @ y
+                ab_s = np.linalg.solve(ATA + ridge * np.eye(2), ATy)
+            else:
+                ab_s, *_ = np.linalg.lstsq(Phi_s, y, rcond=None)
+        except np.linalg.LinAlgError:
+            # tiny ridge rescue
+            ATA = Phi_s.T @ Phi_s
+            ATy = Phi_s.T @ y
+            ab_s = np.linalg.solve(ATA + 1e-12 * np.eye(2), ATy)
 
-    # linear least squares for a and b~ on centered axis
-    Phi = np.column_stack([np.ones_like(xc), np.exp(-g0 * xc)])
-    ab, *_ = np.linalg.lstsq(Phi, y, rcond=None)
-    a0, btil0 = ab
-    return np.array([a0, btil0, g0]), T0  # return T0 so the caller knows the centering
+        ab = ab_s / col_scale  # unscale
+        res = y - Phi @ ab
+        return float(res @ res)
 
-(sfbeta0,sfT0) = estimate_beta0_exp_offset(Tsfit,Usfit)
-(nfbeta0,nfT0) = estimate_beta0_exp_offset(Tnfit,Unfit)
+    # 1D bounded minimization over g
+    res = minimize_scalar(rss_for_g, bounds=g_bounds, method="bounded")
+    g0 = float(res.x if (res.success and np.isfinite(res.x)) else 1.0 / dx)
 
+    # final (a0, b~0) with the chosen g0
+    z0 = _safe_exp_neg(g0, xc)
+    Phi0 = np.column_stack([np.ones_like(xc), z0])
+    col_scale = np.linalg.norm(Phi0, axis=0)
+    col_scale[col_scale == 0] = 1.0
+    Phi0_s = Phi0 / col_scale
+    try:
+        if ridge > 0:
+            ATA = Phi0_s.T @ Phi0_s
+            ATy = Phi0_s.T @ y
+            ab_s = np.linalg.solve(ATA + ridge * np.eye(2), ATy)
+        else:
+            ab_s, *_ = np.linalg.lstsq(Phi0_s, y, rcond=None)
+    except np.linalg.LinAlgError:
+        ATA = Phi0_s.T @ Phi0_s
+        ATy = Phi0_s.T @ y
+        ab_s = np.linalg.solve(ATA + 1e-12 * np.eye(2), ATy)
+
+    a0, btil0 = (ab_s / col_scale)
+
+    return np.array([a0, btil0, g0], float), T0
+
+# Initial parameters (separate phases)
+(sfbeta0, sfT0) = estimate_beta0_exp_offset(Tsfit, Usfit)
+(nfbeta0, nfT0) = estimate_beta0_exp_offset(Tnfit, Unfit)
+
+# Centered models
 sfmodel = Model(*make_centered_model(sfT0))
 nfmodel = Model(*make_centered_model(nfT0))
 
-sfdata = RealData(Tsfit,Usfit,dTsfit,dUsfit)
-nfdata = RealData(Tnfit,Unfit,dTnfit,dUnfit)
+# Ensure you pass the correct errors (x->sx, y->sy) and avoid zeros/NaNs
+eps = 1e-9
+dUsfit_safe = np.where(np.isfinite(dUsfit) & (dUsfit > 0), dUsfit, eps)
+dUnfit_safe = np.where(np.isfinite(dUnfit) & (dUnfit > 0), dUnfit, eps)
+dTsfit_safe = np.where(np.isfinite(dTsfit) & (dTsfit > 0), dTsfit, eps)
+dTnfit_safe = np.where(np.isfinite(dTnfit) & (dTnfit > 0), dTnfit, eps)
 
-sfout = ODR(sfdata,sfmodel,beta0=sfbeta0).run()
-nfout = ODR(nfdata,nfmodel,beta0=nfbeta0).run()
+sfdata = RealData(Tsfit, Usfit, sx=dTsfit_safe, sy=dUsfit_safe)
+nfdata = RealData(Tnfit, Unfit, sx=dTnfit_safe, sy=dUnfit_safe)
 
+sfout = ODR(sfdata, sfmodel, beta0=sfbeta0).run()
+nfout = ODR(nfdata, nfmodel, beta0=nfbeta0).run()
+
+# Back to original b (use the right T0 variable names)
 sfa, sfbtil, sfc = sfout.beta
 nfa, nfbtil, nfc = nfout.beta
 sfb = sfbtil * np.exp(+sfc * sfT0)
 nfb = nfbtil * np.exp(+nfc * nfT0)
 
-print("sfbeta =", np.asarray([sfa,sfb,sfc]))        # [a, b, g]
-print("sfsd   =", sfout.sd_beta)     # 1σ parameter uncertainties
-print("sfwhy  =", sfout.stopreason)  # convergence info
+print("sfbeta =", np.array([sfa, sfb, sfc]))
+print("sfsd   =", sfout.sd_beta)
+print("sfwhy  =", sfout.stopreason)
 
-print("nfbeta =", np.asarray([nfa,nfb,nfc]))        # [a, b, g]
-print("nfsd   =", nfout.sd_beta)     # 1σ parameter uncertainties
-print("nfwhy  =", nfout.stopreason)  # convergence info
+print("nfbeta =", np.array([nfa, nfb, nfc]))
+print("nfsd   =", nfout.sd_beta)
+print("nfwhy  =", nfout.stopreason)
 
 pltexit()
 
