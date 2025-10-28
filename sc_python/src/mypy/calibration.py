@@ -524,99 +524,162 @@ def _pick_spread_indices(n, k):
     # choose k indices spread across [0, n-1]
     return np.unique(np.round(np.linspace(0, n-1, k)).astype(int))
 
+# def estimate_beta0_exp_offset(x, y, n_triples=20, g_bounds=None):
+#     """
+#         Estimate initial [a, b, g] for y = a + b*exp(-g*x) with minimal assumptions.
+
+#         Parameters
+#         ----------
+#         x, y : arrays of shape (n,)
+#         n_triples : how many triples to sample across the domain (>= 3)
+#         g_bounds : tuple(low, high) search bounds for g (default: auto from data span)
+
+#         Returns
+#         -------
+#         beta0 : np.ndarray [a0, b0, g0]
+#     """
+#     x = np.asarray(x, float)
+#     y = np.asarray(y, float)
+#     assert x.ndim == y.ndim == 1 and x.size == y.size and x.size >= 3
+
+#     # sort by x
+#     idx = np.argsort(x)
+#     x, y = x[idx], y[idx]
+#     n = x.size
+
+#     # Set a broad, data-driven search window for g:
+#     #   characteristic scale ~ 1 / (x_max - x_min)
+#     dx = x[-1] - x[0]
+#     if dx <= 0:
+#         dx = 1.0
+#     if g_bounds is None:
+#         # allow many decades around the characteristic scale
+#         g_low  = 1e-6 / dx
+#         g_high = 1e+6 / dx
+#         g_bounds = (g_low, g_high)
+
+#     # Build triples that are well spaced
+#     # (e.g., pick ~sqrt(n) candidate positions and form consecutive triples)
+#     k = max(5, min(n, int(np.sqrt(max(n_triples*3, 9)))))
+#     pts = _pick_spread_indices(n, k)
+#     triples = []
+#     for i in range(len(pts)-2):
+#         i1, i2, i3 = pts[i], pts[i+1], pts[i+2]
+#         if i1 < i2 < i3:
+#             triples.append((i1,i2,i3))
+
+#     # If not enough, fall back to evenly spaced consecutive triples
+#     if len(triples) < 3:
+#         triples = [(i, i+1, i+2) for i in range(n-2)]
+
+#     g_list = []
+#     for (i1,i2,i3) in triples:
+#         g_hat = _estimate_g_from_triple(x[i1], y[i1], x[i2], y[i2], x[i3], y[i3], g_bounds)
+#         if np.isfinite(g_hat):
+#             g_list.append(g_hat)
+
+#     if len(g_list) == 0:
+#         # fallback: simple default scale
+#         g0 = 1.0 / max(dx, 1.0)
+#     else:
+#         # robust central estimate
+#         g0 = float(np.median(g_list))
+
+#     # With g0 fixed, solve linear least squares for a,b:
+#     Phi = np.column_stack([np.ones_like(x), np.exp(-g0 * x)])  # shape (n,2)
+#     ab, *_ = np.linalg.lstsq(Phi, y, rcond=None)
+#     a0, b0 = ab
+
+#     return np.array([a0, b0, g0])
+
+# sfbeta0 = estimate_beta0_exp_offset(Tsfit,Usfit)
+# nfbeta0 = estimate_beta0_exp_offset(Tnfit,Unfit)
+# # OPtional: broadcast sf/nf-beta0 to curve_fit and obtain bestimate with curve_fit
+# OPtional = True
+# if OPtional:
+#     def f_exp(x,a,b,c):
+#         return a+b*np.exp(-c*x)
+#     sfopt,sfcov = curve_fit(f_exp,Tsfit,Usfit,p0=sfbeta0,maxfev=10000)
+#     sfbeta0 = sfopt
+#     nfopt,nfcov = curve_fit(f_exp,Tnfit,Unfit,p0=nfbeta0,maxfev=10000)
+#     nfbeta0 = nfopt
+
+# model = Model(odr_f, fjacb=odr_fjacb, fjacd=odr_fjacd)
+
+# sfdata = RealData(Tsfit, Usfit, sx=dTsfit, sy=dUsfit)
+# nfdata = RealData(Tnfit, Unfit, sx=dTnfit, sy=dUnfit)
+
+# sfout = ODR(sfdata,model,beta0=sfbeta0).run()
+# nfout = ODR(nfdata,model,beta0=nfbeta0).run()
+
+# print("sfbeta =", sfout.beta)        # [a, b, g]
+# print("sfsd   =", sfout.sd_beta)     # 1σ parameter uncertainties
+# print("sfwhy  =", sfout.stopreason)  # convergence info
+
+# print("nfbeta =", nfout.beta)        # [a, b, g]
+# print("nfsd   =", nfout.sd_beta)     # 1σ parameter uncertainties
+# print("nfwhy  =", nfout.stopreason)  # convergence info
+
+# -----------------------------------------------------------------------------
 def estimate_beta0_exp_offset(x, y, n_triples=20, g_bounds=None):
-    """
-        Estimate initial [a, b, g] for y = a + b*exp(-g*x) with minimal assumptions.
-
-        Parameters
-        ----------
-        x, y : arrays of shape (n,)
-        n_triples : how many triples to sample across the domain (>= 3)
-        g_bounds : tuple(low, high) search bounds for g (default: auto from data span)
-
-        Returns
-        -------
-        beta0 : np.ndarray [a0, b0, g0]
-    """
     x = np.asarray(x, float)
     y = np.asarray(y, float)
     assert x.ndim == y.ndim == 1 and x.size == y.size and x.size >= 3
 
-    # sort by x
+    # sort and center
     idx = np.argsort(x)
     x, y = x[idx], y[idx]
-    n = x.size
+    T0 = np.median(x)
+    xc = x - T0
 
-    # Set a broad, data-driven search window for g:
-    #   characteristic scale ~ 1 / (x_max - x_min)
-    dx = x[-1] - x[0]
-    if dx <= 0:
-        dx = 1.0
+    # span-based bounds for c on centered axis
+    dx = xc[-1] - xc[0]
+    dx = dx if dx > 0 else 1.0
     if g_bounds is None:
-        # allow many decades around the characteristic scale
-        g_low  = 1e-6 / dx
-        g_high = 1e+6 / dx
-        g_bounds = (g_low, g_high)
+        g_bounds = (1e-6/dx, 1e6/dx)
 
-    # Build triples that are well spaced
-    # (e.g., pick ~sqrt(n) candidate positions and form consecutive triples)
-    k = max(5, min(n, int(np.sqrt(max(n_triples*3, 9)))))
-    pts = _pick_spread_indices(n, k)
-    triples = []
-    for i in range(len(pts)-2):
-        i1, i2, i3 = pts[i], pts[i+1], pts[i+2]
-        if i1 < i2 < i3:
-            triples.append((i1,i2,i3))
-
-    # If not enough, fall back to evenly spaced consecutive triples
-    if len(triples) < 3:
-        triples = [(i, i+1, i+2) for i in range(n-2)]
+    # triples as before, but on xc
+    k = max(5, min(xc.size, int(np.sqrt(max(n_triples*3, 9)))))
+    pts = _pick_spread_indices(xc.size, k)
+    triples = [(pts[i], pts[i+1], pts[i+2]) for i in range(len(pts)-2)] or \
+              [(i, i+1, i+2) for i in range(xc.size-2)]
 
     g_list = []
     for (i1,i2,i3) in triples:
-        g_hat = _estimate_g_from_triple(x[i1], y[i1], x[i2], y[i2], x[i3], y[i3], g_bounds)
+        g_hat = _estimate_g_from_triple(xc[i1], y[i1], xc[i2], y[i2], xc[i3], y[i3], g_bounds)
         if np.isfinite(g_hat):
             g_list.append(g_hat)
 
-    if len(g_list) == 0:
-        # fallback: simple default scale
-        g0 = 1.0 / max(dx, 1.0)
-    else:
-        # robust central estimate
-        g0 = float(np.median(g_list))
+    g0 = float(np.median(g_list)) if len(g_list) else 1.0/max(dx, 1.0)
 
-    # With g0 fixed, solve linear least squares for a,b:
-    Phi = np.column_stack([np.ones_like(x), np.exp(-g0 * x)])  # shape (n,2)
+    # linear least squares for a and b~ on centered axis
+    Phi = np.column_stack([np.ones_like(xc), np.exp(-g0 * xc)])
     ab, *_ = np.linalg.lstsq(Phi, y, rcond=None)
-    a0, b0 = ab
+    a0, btil0 = ab
+    return np.array([a0, btil0, g0]), T0  # return T0 so the caller knows the centering
 
-    return np.array([a0, b0, g0])
+(sfbeta0,sfT0) = estimate_beta0_exp_offset(Tsfit,Usfit)
+(nfbeta0,nfT0) = estimate_beta0_exp_offset(Tnfit,Unfit)
 
-sfbeta0 = estimate_beta0_exp_offset(Tsfit,Usfit)
-nfbeta0 = estimate_beta0_exp_offset(Tnfit,Unfit)
-# OPtional: broadcast sf/nf-beta0 to curve_fit and obtain bestimate with curve_fit
-OPtional = True
-if OPtional:
-    def f_exp(x,a,b,c):
-        return a+b*np.exp(-c*x)
-    sfopt,sfcov = curve_fit(f_exp,Tsfit,Usfit,p0=sfbeta0,maxfev=10000)
-    sfbeta0 = sfopt
-    nfopt,nfcov = curve_fit(f_exp,Tnfit,Unfit,p0=nfbeta0,maxfev=10000)
-    nfbeta0 = nfopt
+sfmodel = Model(*make_centered_model(sfT0))
+nfmodel = Model(*make_centered_model(nfT0))
 
-model = Model(odr_f, fjacb=odr_fjacb, fjacd=odr_fjacd)
+sfdata = RealData(Tsfit,Usfit,dTsfit,dUsfit)
+nfdata = RealData(Tnfit,Unfit,dTnfit,dUnfit)
 
-sfdata = RealData(Tsfit, Usfit, sx=dTsfit, sy=dUsfit)
-nfdata = RealData(Tnfit, Unfit, sx=dTnfit, sy=dUnfit)
+sfout = ODR(sfdata,sfmodel,beta0=sfbeta0).run()
+nfout = ODR(nfdata,nfmodel,beta0=nfbeta0).run()
 
-sfout = ODR(sfdata,model,beta0=sfbeta0).run()
-nfout = ODR(nfdata,model,beta0=nfbeta0).run()
+sfa, sfbtil, sfc = sfout.beta
+nfa, nfbtil, nfc = nfout.beta
+sfb = sfbtil * np.exp(+sfc * sfT0)
+nfb = nfbtil * np.exp(+nfc * nfT0)
 
-print("sfbeta =", sfout.beta)        # [a, b, g]
+print("sfbeta =", np.asarray([sfa,sfb,sfc]))        # [a, b, g]
 print("sfsd   =", sfout.sd_beta)     # 1σ parameter uncertainties
 print("sfwhy  =", sfout.stopreason)  # convergence info
 
-print("nfbeta =", nfout.beta)        # [a, b, g]
+print("nfbeta =", np.asarray([nfa,nfb,nfc]))        # [a, b, g]
 print("nfsd   =", nfout.sd_beta)     # 1σ parameter uncertainties
 print("nfwhy  =", nfout.stopreason)  # convergence info
 
