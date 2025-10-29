@@ -4,13 +4,13 @@ from __future__ import annotations
 import csv, os
 import numpy as np, sympy as sp
 import config as cfg, core
+import calibration as calib
 import matplotlib.pyplot as plt
 
 from core import Measurement
 from config import figrect, FIG_DIR, MYPY
-from scipy.odr import ODR, RealData, Model
 from itertools import islice
-from calibration import temperature_from_measurement
+from scipy.odr import ODR, RealData, Model
 from matplotlib.patches import Ellipse
 
 
@@ -381,9 +381,9 @@ if test_mode:
 
 for i,(key,m) in enumerate(it):
     # -------------------- workflow to get temperatures -----------------------
-    x1=m.time[masks[i]]
-    y1=m.u_ab[masks[i]]
-    y1err=m.u_ab_err[masks[i]]
+    t=m.time[masks[i]]
+    x=m.u_ab[masks[i]]
+    xerr=m.u_ab_err[masks[i]]
 
     from calibration import slope, slope_var, slope_err, offset, offset_var, offset_err , covar, varco
     pressure,pressure_err = core.p_from_Up(
@@ -399,7 +399,7 @@ for i,(key,m) in enumerate(it):
     dpdT    = p_of_T.derivative()
     dTdp    = T_of_p.derivative()                        # directly dT/dp (kPa⁻1)
 
-    T_meas=T_of_p(pressure)
+    T_meas = calib.inv_band_from_params_jax()
     Tpack = temperature_from_measurement(m)
     T = Tpack['T'][masks[i]]
     T_asym = np.vstack([Tpack['dT_minus'][masks[i]],Tpack['dT_plus'][masks[i]]])

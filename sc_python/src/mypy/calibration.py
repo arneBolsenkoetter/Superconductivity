@@ -42,24 +42,42 @@ print(this_file_name)
 
 # ------------------ fitting U_p linearly to the pressure p with ODR -------------------
 def linear_p_from_Up(
-    m:float, dm:float, b:float, db:float, covar:float, 
-    Up:np.ndarray, Up_err:np.ndarray|None=None
-) -> tuple[np.ndarray, np.ndarray] :
+    m:float, dm:float, b:float, db:float, covar:float,
+    Up:np.ndarray, Up_err:np.ndarray|None=None,
+    psd_fix:bool=True, floor:float=0.0
+) -> tuple[np.ndarray, np.ndarray]:
     """
-        Linear model 
-            p = m*Up + b 
-        Returns: 
-            (p,σ)
+    Propagate p = m*Up + b with uncertainties.
 
-        with:   σ = np.sqrt(var(p)),    var(p) = (m*σU)^2 + (Up*σm)^2 + σb^2 + 2*Up*cov(m,b)
+    var(p)_model = [Up, 1] @ [[dm^2, covar], [covar, db^2]] @ [Up, 1]^T
+    var(p)_meas  = (m * Up_err)^2
     """
-    Up     = np.asarray(Up, float)
-    Up_err = np.asarray(Up_err if Up_err is not None else 0.0, float)
+    Up = np.asarray(Up, float)
+    sU = np.asarray(Up_err if Up_err is not None else 0.0, float)
 
-    p =     m*Up + b
-    var_p = (m*Up_err)**2 + (dm*Up)**2 + db**2 + 2*Up*covar
-    dp =    np.sqrt(var_p)
-    return p, dp
+    # model covariance for (m, b)
+    C = np.array([[dm**2, covar],
+                  [covar, db**2]], dtype=float)
+
+    if psd_fix:
+        # Project to PSD to remove tiny negative eigenvalues
+        w, V = np.linalg.eigh(C)
+        w = np.clip(w, 0.0, None)
+        C = (V * w) @ V.T  # V @ diag(w) @ V.T
+
+    # quadratic form J C J^T
+    J = np.vstack([Up, np.ones_like(Up)]).T  # shape (N,2)
+    var_model = np.einsum('ni,ij,nj->n', J, C, J)
+
+    # input-measurement contribution
+    var_meas = (m * sU)**2
+
+    var_p = var_model + var_meas
+    # numeric guard: never let variance be negative
+    if floor is not None:
+        var_p = np.maximum(var_p, floor)
+
+    return m*Up+b, np.sqrt(var_p)
 
 
 # --------------------------------- ITS90 functions ------------------------------------
@@ -164,136 +182,9 @@ def dT90(
     else:   raise ValueError("ValueError - 'units' must be one of:   'bar' | 'hPa' | 'kPa' | 'Pa'.")
     return dT90jax(p,dp,a0,ai,b,c)
 
-# def interp_with_grid_error(
-#     xM, yM, X, dX:np.ndarray|None=None,
-#     err_mode = 'max',
-#     return_yerr=True,
-#     ):
-#     xM = np.asarray(xM,float)
-#     yM = np.asarray(yM,float)
-#     if xM.ndim != 1 or yM.ndim != 1 or xM.size != yM.size:
-#         raise ValueError("xM and yM must be 1D arrays of the same length")
-#     if xM.size < 2:
-#         raise ValueError("Need at least two map points for interpolation")
-#     order = np.argsort(xM)
-#     xM = xM[order]; yM=yM[order]
-
-#     X  = np.asarray(X,float)
-#     mask = (X>xM.min())&(X<xM.max())
-#     X = X[mask]
-#     dX = dX[mask]
-
-#     j = np.searchsorted(xM,X,side='right')
-#     i = j-1
-
-#     x0 = xM[i]
-#     x1 = xM[j]
-#     y0 = yM[i]
-#     y1 = yM[j]
-
-#     w = x1 - x0
-#     h = y1 - y0
-#     dx_left = X-x0
-
-#     Y = y0 + dx_left/w * h
-#     dy_left = Y-y0
-#     dy_right = y1-Y
-
-#     if err_mode=='max':
-#         dY = np.maximum(dy_left,dy_right)
-#     elif err_mode=='min':
-#         dY = np.minimum(dy_left,dy_right)
-#     elif err_mode=='slope' and dX is not None:
-#         m = h/w
-#         dY = dX*m
-#     elif err_mode=='asym' and dX is not None:
-#         Xmin = X-dX;    Xplu = X+dX
-#         jmin = np.searchsorted(xM,Xmin,side='right');   imin=jmin-1
-#         jplu = np.searchsorted(xM,Xplu,side='right');   iplu=jplu-1
-#         Ymin = yM[imin] + (Xmin-xM[imin])/(xM[jmin]-xM[imin]) * (yM[jmin]-yM[imin])
-#         Yplu = yM[iplu] + (Xplu-xM[iplu])/(xM[jplu]-xM[iplu]) * (yM[jplu]-yM[iplu])
-#         dY = np.vstack([Y-Ymin,Yplu-Y])
-#     else:
-#         raise ValueError("err_mode must either be 'max', 'min', 'slope' or 'asym'.")
-
-#     return (Y,dY) if return_yerr else (Y,None)
-
-
-# # ------------------------------------- shockley ---------------------------------------
-# alpha_,beta_,gamma_,T_ = sp.symbols('alpha_ beta_ gamma_ T_',real=True)
-# shockley = alpha_ + beta_*sp.exp(-gamma_*T_)
-# dY_dT = sp.diff(shockley,T_)
-# dY_da = sp.diff(shockley,alpha_)
-# dY_db = sp.diff(shockley,beta_)
-# dY_dg = sp.diff(shockley,gamma_)
-
-# Y =     sp.lambdify((alpha_,beta_,gamma_,T_),shockley,'numpy')
-# dY_da = sp.lambdify((alpha_,beta_,gamma_,T_),dY_da,'numpy')
-# dY_db = sp.lambdify((alpha_,beta_,gamma_,T_),dY_db,'numpy')
-# dY_dg = sp.lambdify((alpha_,beta_,gamma_,T_),dY_dg,'numpy')
-
 
 # ------------------------------ functions for odr-fit ---------------------------------
-
-# def mdl_shockley(params,T,use_theta:bool=True):
-#     if use_theta:   return shockley(params,T)
-#     else:           return shockley_theta(params,T)
-
-# def shockley1(params,T):
-#     T = np.asarray(T,float)
-#     a,b,g = params
-#     return a + b*np.exp(-g*T)
-
-# def shockley_theta(params,T):
-#     T = np.asarray(T,float)
-#     a,b,th = params
-#     g = np.exp(theta)
-#     return a +b *np.exp(-g*T)
-
-# def mdl_jacobean_params(params,T,use_theta:bool=True):
-#     if use_theta:
-#         a,b,th = params
-#         g = np.exp(th)
-#         e = np.exp(-g*T)
-#         dya = np.ones_like(T)
-#         dyb = e
-#         dyth = -b*T*e*g
-#         return np.vstack([dya,dyb,dyth])[None,:,:]
-#     else:
-#         a,b,g = params 
-#         e = np.exp(-g*T)
-#         J = np.vstack([np.ones_like(T),e,-b*T*e])
-#         return J[None,:,:]                          # odr expects shape (1,p,N)
-
-# def mdl_jacobean_variables(params,T,use_theta:bool=True):
-#     if use_theta:
-#         a,b,th = params
-#         g = np.exp(th)
-#     else:
-#         a,b,g = params
-#     d = -b*g*np.exp(-g*T)
-#     return d[None,None,:]
-
-# def inv_shockley(params,U):
-#     alpha,beta,gamma = params
-#     return (-1)*np.log((U-alpha)/beta)/gamma
-
-# def guess_params(X, Y, log_slope:bool=False):
-#     X = np.asarray(X,float)
-#     Y = np.asarray(Y, float)
-#     a0 = np.percentile(Y,10)
-#     b0 = max(np.median(Y)-a0,1e-12)
-#     if log_slope:
-#         xq = np.quantile(X, [0.2, 0.8])
-#         yq = np.clip(np.quantile(Y - a0, [0.2, 0.8]), 1e-12, None)
-#         g0 = abs(np.log(yq[0]/yq[1]) / (xq[1]-xq[0])) if xq[1] > xq[0] else 1.0
-#     else:
-#         dx = max(X.max() - X.min(), 1e-12)
-#         g0 = 1.0/dx
-#     return np.array([a0,b0,g0],float)
-
-# ----- use jax.numpy -----
-# --- model: scalar and vectorized ---
+# ----- model: scalar and vectorized -----
 def shockley_scalar(params, t):
     a, b, g = params
     return a + b * jnp.exp(-g * t)       # scalar t -> scalar y
@@ -304,7 +195,14 @@ def shockley(params, T):
     a, b, g = params
     return a + b * jnp.exp(-g * T)       # vector T -> vector y
 
-# ----- Jacobians via autodiff -----
+@jit
+def dshockley(params,dparams,T,dT):
+    a,b,g=params
+    dg_dparams = grad(shockley_scalar,argnums=0)(params,T)
+    dg_dx = grad(shockley_scalar,argnums=1)(params,T)
+    return jnp.sqrt((dg_dparams*dparams)**2 + (dg_dx*dT)**2)
+
+# --- Jacobians via autodiff ---
 # J_beta: dy/d[a,b,g] at each T_i  -> shape (n, 3)
 @jit
 def jacobian_beta(params, T):
@@ -318,7 +216,26 @@ def jacobian_x(params, T):
     g_x = grad(shockley_scalar, argnums=1)
     return vmap(g_x, in_axes=(None, 0))(params, T)
 
-# ----- Optional: SciPy ODR adapters (shapes must match ODR's expectation) -----
+# ----- inverted shockley function -----
+def inverted_scalar(params,U):
+    a,b,g = params
+    return -jnp.log((U-a)/b)/g
+
+@jit
+def inverted_shockley(params,U):
+    a,b,g=params
+    return -jnp.log((U-a)/b)/g
+
+@jit
+def inverted_jacobean_beta(params,U):
+    h_params = grad(inverted_scalar,argnums=0)
+    return vmap(h_params,in_axes=(None,0))(params,U)
+
+@jit
+def inverted_jacobean_x(params,U):
+    h_x = grad(inverted_scalar,argnums=1)
+    return vmap(h_x,in_axes=(None,0))(params,U)
+# ---- Optional: SciPy ODR adapters (shapes must match ODR's expectation) -----
 # ODR expects:
 #   f(beta, x)       -> (n,)
 #   fjacb(beta, x)   -> (m, n)  with m = number of parameters (here 3)
@@ -352,7 +269,7 @@ def pltexit():
 
 
 
-# ------------------------------------- tester -----------------------------------------
+# --- before proceeding to execute the rest of the script, check the import of npDV ----
 tester = False
 if tester:
     # print(npDV['volts'])
@@ -403,7 +320,7 @@ offset_var = var_b
 offset_err = b_err
 
 
-# --------------------------- get preassure p_p from Up --------------------------------
+# --------------------------- get pressure p_p from Up ---------------------------------
 m1 = Measurement.from_npz(cfg.DATA_DIR/"clean/LHJG__Supraleitung_1.npz")
 print(m1.columns)
 
@@ -458,7 +375,7 @@ T[nf_only] = Tnf_full[nf_only];     dT[nf_only] = dTnf_full[nf_only]
 T[both] = (w_sf[both]*Tsf_full[both] + w_nf[both]*Tnf_full[both])/wsum[both];   dT[both] = np.sqrt(dTsf_full[both]**2 + dTnf_full[both]**2)
 
 mask_sfit = (1.73<=T)&(T<=2.17)
-mask_nfit = (T>=2.18)&(T<=4.2)
+mask_nfit = (T>=2.16)&(T<=4.1)
 Usfit = U[mask_sfit];   dUsfit = dU[mask_sfit]
 Tsfit = T[mask_sfit];   dTsfit = dT[mask_sfit]
 Unfit = U[mask_nfit];   dUnfit = dU[mask_nfit]
@@ -524,165 +441,6 @@ def _pick_spread_indices(n, k):
     # choose k indices spread across [0, n-1]
     return np.unique(np.round(np.linspace(0, n-1, k)).astype(int))
 
-# def estimate_beta0_exp_offset(x, y, n_triples=20, g_bounds=None):
-#     """
-#         Estimate initial [a, b, g] for y = a + b*exp(-g*x) with minimal assumptions.
-
-#         Parameters
-#         ----------
-#         x, y : arrays of shape (n,)
-#         n_triples : how many triples to sample across the domain (>= 3)
-#         g_bounds : tuple(low, high) search bounds for g (default: auto from data span)
-
-#         Returns
-#         -------
-#         beta0 : np.ndarray [a0, b0, g0]
-#     """
-#     x = np.asarray(x, float)
-#     y = np.asarray(y, float)
-#     assert x.ndim == y.ndim == 1 and x.size == y.size and x.size >= 3
-
-#     # sort by x
-#     idx = np.argsort(x)
-#     x, y = x[idx], y[idx]
-#     n = x.size
-
-#     # Set a broad, data-driven search window for g:
-#     #   characteristic scale ~ 1 / (x_max - x_min)
-#     dx = x[-1] - x[0]
-#     if dx <= 0:
-#         dx = 1.0
-#     if g_bounds is None:
-#         # allow many decades around the characteristic scale
-#         g_low  = 1e-6 / dx
-#         g_high = 1e+6 / dx
-#         g_bounds = (g_low, g_high)
-
-#     # Build triples that are well spaced
-#     # (e.g., pick ~sqrt(n) candidate positions and form consecutive triples)
-#     k = max(5, min(n, int(np.sqrt(max(n_triples*3, 9)))))
-#     pts = _pick_spread_indices(n, k)
-#     triples = []
-#     for i in range(len(pts)-2):
-#         i1, i2, i3 = pts[i], pts[i+1], pts[i+2]
-#         if i1 < i2 < i3:
-#             triples.append((i1,i2,i3))
-
-#     # If not enough, fall back to evenly spaced consecutive triples
-#     if len(triples) < 3:
-#         triples = [(i, i+1, i+2) for i in range(n-2)]
-
-#     g_list = []
-#     for (i1,i2,i3) in triples:
-#         g_hat = _estimate_g_from_triple(x[i1], y[i1], x[i2], y[i2], x[i3], y[i3], g_bounds)
-#         if np.isfinite(g_hat):
-#             g_list.append(g_hat)
-
-#     if len(g_list) == 0:
-#         # fallback: simple default scale
-#         g0 = 1.0 / max(dx, 1.0)
-#     else:
-#         # robust central estimate
-#         g0 = float(np.median(g_list))
-
-#     # With g0 fixed, solve linear least squares for a,b:
-#     Phi = np.column_stack([np.ones_like(x), np.exp(-g0 * x)])  # shape (n,2)
-#     ab, *_ = np.linalg.lstsq(Phi, y, rcond=None)
-#     a0, b0 = ab
-
-#     return np.array([a0, b0, g0])
-
-# sfbeta0 = estimate_beta0_exp_offset(Tsfit,Usfit)
-# nfbeta0 = estimate_beta0_exp_offset(Tnfit,Unfit)
-# # OPtional: broadcast sf/nf-beta0 to curve_fit and obtain bestimate with curve_fit
-# OPtional = True
-# if OPtional:
-#     def f_exp(x,a,b,c):
-#         return a+b*np.exp(-c*x)
-#     sfopt,sfcov = curve_fit(f_exp,Tsfit,Usfit,p0=sfbeta0,maxfev=10000)
-#     sfbeta0 = sfopt
-#     nfopt,nfcov = curve_fit(f_exp,Tnfit,Unfit,p0=nfbeta0,maxfev=10000)
-#     nfbeta0 = nfopt
-
-# model = Model(odr_f, fjacb=odr_fjacb, fjacd=odr_fjacd)
-
-# sfdata = RealData(Tsfit, Usfit, sx=dTsfit, sy=dUsfit)
-# nfdata = RealData(Tnfit, Unfit, sx=dTnfit, sy=dUnfit)
-
-# sfout = ODR(sfdata,model,beta0=sfbeta0).run()
-# nfout = ODR(nfdata,model,beta0=nfbeta0).run()
-
-# print("sfbeta =", sfout.beta)        # [a, b, g]
-# print("sfsd   =", sfout.sd_beta)     # 1σ parameter uncertainties
-# print("sfwhy  =", sfout.stopreason)  # convergence info
-
-# print("nfbeta =", nfout.beta)        # [a, b, g]
-# print("nfsd   =", nfout.sd_beta)     # 1σ parameter uncertainties
-# print("nfwhy  =", nfout.stopreason)  # convergence info
-
-# -----------------------------------------------------------------------------
-# def estimate_beta0_exp_offset(x, y, n_triples=20, g_bounds=None):
-#     x = np.asarray(x, float)
-#     y = np.asarray(y, float)
-#     assert x.ndim == y.ndim == 1 and x.size == y.size and x.size >= 3
-
-#     # sort and center
-#     idx = np.argsort(x)
-#     x, y = x[idx], y[idx]
-#     T0 = np.median(x)
-#     xc = x - T0
-
-#     # span-based bounds for c on centered axis
-#     dx = xc[-1] - xc[0]
-#     dx = dx if dx > 0 else 1.0
-#     if g_bounds is None:
-#         g_bounds = (1e-6/dx, 1e6/dx)
-
-#     # triples as before, but on xc
-#     k = max(5, min(xc.size, int(np.sqrt(max(n_triples*3, 9)))))
-#     pts = _pick_spread_indices(xc.size, k)
-#     triples = [(pts[i], pts[i+1], pts[i+2]) for i in range(len(pts)-2)] or \
-#               [(i, i+1, i+2) for i in range(xc.size-2)]
-
-#     g_list = []
-#     for (i1,i2,i3) in triples:
-#         g_hat = _estimate_g_from_triple(xc[i1], y[i1], xc[i2], y[i2], xc[i3], y[i3], g_bounds)
-#         if np.isfinite(g_hat):
-#             g_list.append(g_hat)
-
-#     g0 = float(np.median(g_list)) if len(g_list) else 1.0/max(dx, 1.0)
-
-#     # linear least squares for a and b~ on centered axis
-#     Phi = np.column_stack([np.ones_like(xc), np.exp(-g0 * xc)])
-#     ab, *_ = np.linalg.lstsq(Phi, y, rcond=None)
-#     a0, btil0 = ab
-#     return np.array([a0, btil0, g0]), T0  # return T0 so the caller knows the centering
-
-# (sfbeta0,sfT0) = estimate_beta0_exp_offset(Tsfit,Usfit)
-# (nfbeta0,nfT0) = estimate_beta0_exp_offset(Tnfit,Unfit)
-
-# sfmodel = Model(*make_centered_model(sfT0))
-# nfmodel = Model(*make_centered_model(nfT0))
-
-# sfdata = RealData(Tsfit,Usfit,dTsfit,dUsfit)
-# nfdata = RealData(Tnfit,Unfit,dTnfit,dUnfit)
-
-# sfout = ODR(sfdata,sfmodel,beta0=sfbeta0).run()
-# nfout = ODR(nfdata,nfmodel,beta0=nfbeta0).run()
-
-# sfa, sfbtil, sfc = sfout.beta
-# nfa, nfbtil, nfc = nfout.beta
-# sfb = sfbtil * np.exp(+sfc * sfT0)
-# nfb = nfbtil * np.exp(+nfc * nfT0)
-
-# print("sfbeta =", np.asarray([sfa,sfb,sfc]))        # [a, b, g]
-# print("sfsd   =", sfout.sd_beta)     # 1σ parameter uncertainties
-# print("sfwhy  =", sfout.stopreason)  # convergence info
-
-# print("nfbeta =", np.asarray([nfa,nfb,nfc]))        # [a, b, g]
-# print("nfsd   =", nfout.sd_beta)     # 1σ parameter uncertainties
-# print("nfwhy  =", nfout.stopreason)  # convergence info
-
 # -----------------------------------------------------------------------------
 def _safe_exp_neg(g, xc):
     # Keep |g*xc| within a safe window to avoid overflow/underflow.
@@ -693,8 +451,8 @@ def _safe_exp_neg(g, xc):
 
 def estimate_beta0_exp_offset(x, y, g_bounds=None, ridge=0.0):
     """
-    Robust, assumption-light initializer for y = a + b*exp(-g*x)
-    Returns ( [a0, btil0, g0], T0 ) with centered x (x_c = x - T0).
+        Robust, assumption-light initializer for y = a + b*exp(-g*x)
+        Returns ( [a0, btil0, g0], T0 ) with centered x (x_c = x - T0).
     """
     x = np.asarray(x, float)
     y = np.asarray(y, float)
@@ -770,6 +528,93 @@ def estimate_beta0_exp_offset(x, y, g_bounds=None, ridge=0.0):
 
     return np.array([a0, btil0, g0], float), T0
 
+def transform_centered_params(beta_centered, cov_centered, T0):
+    """
+    Map (a, btil, c) -> (a, b, c) with b = btil*exp(c*T0),
+    and propagate the covariance accordingly.
+    """
+    a, btil, c = map(float, beta_centered)
+    ecT0 = np.exp(c * T0)
+    b = btil * ecT0
+
+    J = np.array([
+        [1.0,      0.0,        0.0],
+        [0.0,      ecT0,       T0 * b],
+        [0.0,      0.0,        1.0],
+    ], dtype=float)
+
+    cov_orig = J @ cov_centered @ J.T
+    sd_orig  = np.sqrt(np.diag(cov_orig))
+    beta_orig = np.array([a, b, c], dtype=float)
+    return beta_orig, cov_orig, sd_orig
+
+@jit
+def band_from_params_jax(beta, cov_beta_np, x_grid_np, sx_np=None):
+    """
+        beta:        (3,) JAX or NumPy  -> [a,b,c]
+        cov_beta_np: (3,3) NumPy (from ODR)   (we'll convert to jax)
+        x_grid_np:   (n,) NumPy/JAX
+        sx_np:       (n,) NumPy/JAX or None  (temperature uncertainties on the grid)
+        returns: y_hat (n,), s_y (n,)
+    """
+    beta_j = jnp.asarray(beta, float)
+    C = jnp.asarray(cov_beta_np, float)
+    x = jnp.asarray(x_grid_np, float)
+
+    # predictions
+    y = shockley(beta_j, x)  # (n,)
+
+    # parameter part: diag(J C J^T)
+    J = jacobian_beta(beta_j, x)  # (n,3)
+    var_model = jnp.einsum('ni,ij,nj->n', J, C, J)
+
+    # x-uncertainty (optional)
+    if sx_np is not None:
+        sx = jnp.asarray(sx_np, float)
+        dy_dx = jacobian_x(beta_j, x)  # (n,)
+        var_x = (dy_dx * sx) ** 2
+        var_tot = var_model + var_x
+    else:
+        var_tot = var_model
+
+    var_tot = jnp.clip(var_tot, a_min=0.0)  # numerical guard
+    return y, jnp.sqrt(var_tot)
+
+@jit
+def inv_band_from_params_jax(beta, cov_beta_np, U_grid_np, sU_np=None):
+    """
+    beta:        (3,) JAX/NumPy  -> [a,b,c]
+    cov_beta_np: (3,3) NumPy covariance
+    U_grid_np:   (n,) voltages
+    sU_np:       (n,) voltage uncertainties or None
+    """
+    beta_j = jnp.asarray(beta, float)
+    C = jnp.asarray(cov_beta_np, float)
+    U = jnp.asarray(U_grid_np, float)
+
+    # Domain guard: (U-a)/b must be > 0. Clip slightly away from 0.
+    a, b, c = beta_j
+    z = (U - a) / b
+    z = jnp.clip(z, 1e-300, None)
+    # recompute U if you prefer strict consistency; here we only guard the log internally
+    T = -jnp.log(z) / c  # equals inverted_shockley but avoids re-checks
+
+    # Parameter covariance part
+    Jb = inverted_jacobean_beta(beta_j, U)  # (n,3)
+    var_model = jnp.einsum('ni,ij,nj->n', Jb, C, Jb)
+
+    # U-uncertainty (optional)
+    if sU_np is not None:
+        sU = jnp.asarray(sU_np, float)
+        dT_dU = inverted_jacobean_x(beta_j, U)  # (n,)
+        var_U = (dT_dU * sU) ** 2
+        var_tot = var_model + var_U
+    else:
+        var_tot = var_model
+
+    var_tot = jnp.clip(var_tot, a_min=0.0)
+    return T, jnp.sqrt(var_tot)
+# -----------------------------------------------------------------------------
 # Initial parameters (separate phases)
 (sfbeta0, sfT0) = estimate_beta0_exp_offset(Tsfit, Usfit)
 (nfbeta0, nfT0) = estimate_beta0_exp_offset(Tnfit, Unfit)
@@ -791,25 +636,23 @@ nfdata = RealData(Tnfit, Unfit, sx=dTnfit_safe, sy=dUnfit_safe)
 sfout = ODR(sfdata, sfmodel, beta0=sfbeta0).run()
 nfout = ODR(nfdata, nfmodel, beta0=nfbeta0).run()
 
-# Back to original b (use the right T0 variable names)
-sfa, sfbtil, sfc = sfout.beta
-nfa, nfbtil, nfc = nfout.beta
-sfb = sfbtil * np.exp(+sfc * sfT0)
-nfb = nfbtil * np.exp(+nfc * nfT0)
+#SF
+sfbetac =               sfout.beta
+sfcovc =                sfout.cov_beta
+sfbeta, sfcov, sfsd =   transform_centered_params(sfbetac, sfcovc, sfT0)
 
-print("sfbeta =", np.array([sfa, sfb, sfc]))
-print("sfsd   =", sfout.sd_beta)
-print("sfwhy  =", sfout.stopreason)
+# NF
+nfbetac =   nfout.beta
+nfcovc =    nfout.cov_beta
+nfbeta, nfcov, nfsd = transform_centered_params(nfbetac, nfcovc, nfT0)
 
-print("nfbeta =", np.array([nfa, nfb, nfc]))
-print("nfsd   =", nfout.sd_beta)
-print("nfwhy  =", nfout.stopreason)
-
-pltexit()
+print("SF beta (a,b,c):", sfbeta)
+print("SF 1σ:", sfsd)
+print("NF beta (a,b,c):", nfbeta)
+print("NF 1σ:", nfsd)
 
 
 if __name__=="__main__":
-
     initial_tests = False
     # --- some checks, from the early stages of this script ---
     if initial_tests:
@@ -911,11 +754,13 @@ if __name__=="__main__":
         pressure_ax[0].set_ylabel(r'Pressure $P$')
         plt.show()
 
-    print(len(T))
-    print(len(T[sf_only]))
-    print(len(T[nf_only]))
-    print(len(T[both]))
-    print(f'{"Checksum:":<10}{len(T):4}=={len(T[sf_only]):>4}+{len(T[both]):4}+{len(T[nf_only]):<4}','...',bool(len(T)==len(T[sf_only])+len(T[both])+len(T[nf_only])))
+    checksum=False
+    if checksum:
+        print(len(T))
+        print(len(T[sf_only]))
+        print(len(T[nf_only]))
+        print(len(T[both]))
+        print(f'{"Checksum:":<10}{len(T):4}=={len(T[sf_only]):>4}+{len(T[both]):4}+{len(T[nf_only]):<4}','...',bool(len(T)==len(T[sf_only])+len(T[both])+len(T[nf_only])))
 
     # ----- 1.1)[detour]: fit ITS90 -----
     show_c = False
@@ -974,75 +819,52 @@ if __name__=="__main__":
         plt.show()
         pltexit()
 
-    # # ------------------------ Allen-Bradley Calibration -------------------------------
-    # if not cfg.confirm():   pltexit()
-    # # --- defining masks for super-fluid and normal-fluid phases (and additional) ---
-    # mask_infty = np.isfinite(T) & np.isfinite(dT) & np.isfinite(U) & np.isfinite(dU)
-    # mask0 = (T<=4.2)
-    # mask_zoom = (1.73<=T)&(T<=2.2)
-    # mask_normalfluid = (2.2<=T)&(T<=4.2)
-    # mask_superfluid = (T>=1.78)&(T<=2.15) 
-    # # mask_superfluid = ((2.07<=T)&(2.15>=T))     # there is a little secondary (smaller bump at approx 2.05)
-    # mask = mask_infty&mask0
-    # # --- apply masks ---
-    # T_sf, U_sf, sU_sf = T[mask_superfluid],  U[mask_superfluid],  dU[mask_superfluid]
-    # T_nf, U_nf, sU_nf = T[mask_normalfluid], U[mask_normalfluid], dU[mask_normalfluid]
-    # # --- special treatment for the errors in T ---
-    # if dT_method == 'asym': sT_sf = dT[:,mask_superfluid];  sT_nf = dT[:,mask_normalfluid]
-    # else:                   sT_sf = dT[mask_superfluid];    sT_nf = dT[mask_normalfluid]
-    # # ODR need symmetric errors:
-    # sT_sf = np.maximum(sT_sf[0,:],sT_sf[1,:]);  sT_nf = np.maximum(sT_nf[0,:],sT_nf[1,:])
-
-    # init_params_sf = guess_params(T_sf,U_sf,log_slope=True);   init_params_nf = guess_params(T_nf,U_nf)
-
-    # shockley_model = Model(
-    #     fcn=lambda beta, x: mdl_shockley(beta, x),
-    #     fjacb=mdl_jacobean_params,
-    #     fjacd=mdl_jacobean_variables
-    # )
-    # data_sf = RealData(x=T_sf,y=U_sf,sx=sT_sf,sy=sU_sf);    data_nf = RealData(x=T_nf,y=U_nf,sx=sT_nf,sy=sU_nf)
-    # odr_sf = odr.ODR(data_sf,shockley_model,beta0=init_params_sf,maxit=300)
-    # odr_nf = odr.ODR(data_nf,shockley_model,beta0=init_params_nf,maxit=300)
-    # out_sf = odr_sf.run();  out_nf = odr_nf.run()
-
-    # asf,bsf,gsf = out_sf.beta;          anf,bnf,gnf = out_nf.beta
-    # sasf,sbsf,sgsf = out_sf.sd_beta;    sanf,sbnf,sgnf = out_nf.sd_beta
-    # cov_sf = out_sf.cov_beta;           cov_nf = out_nf.cov_beta
-    # res_var_sf = out_sf.res_var;        res_var_nf = out_nf.res_var
-
-    # print('Scipy.Optimize.Curve_Fit:')
-    # cf_best_sf,cf_cov_sf = curve_fit(
-    #     lambda T,a,b,g: a+b*np.exp(-g*T),
-    #     T_sf,U_sf,
-    #     )
-    # cf_best_nf,cf_cov_nf = curve_fit(
-    #     lambda T,a,b,g: a+b*np.exp(-g*T),
-    #     T_nf,U_nf,
-    #     )
-
     plot_AB=True
     if plot_AB:
+        mask_zoom = (T>=1.73)&(T<=2.2)
+        utilmask = sf_mask | (T<=2.4)
         fig,ax=plt.subplots(nrows=1,ncols=2,figsize=figrect(ncols=2))
 
-        sfxx = np.linspace(T[mask_zoom].min(),T[mask_zoom].max(),512)
-        sfyy = mdl_shockley(out_sf.beta,sfxx)
-        sfcf = mdl_shockley(cf_best_sf,sfxx)
-        ax[0].errorbar(x=T[mask_zoom],xerr=dT[:,mask_zoom],y=U[mask_zoom],yerr=dU[mask_zoom])
+        sfxx = np.linspace(T[utilmask].min(),T[utilmask].max(),512)
+        sfdxx = np.full_like(sfxx, float(np.median(dTsfit)))
+        sfyy = shockley(sfbeta,sfxx)
+        sfy,sfdy = np.asarray(band_from_params_jax(sfbeta,sfcov,sfxx,sx_np=sfdxx))
+        finite = np.isfinite(sfxx) & np.isfinite(sfy) & np.isfinite(sfdy)
+        sfxx,sfy,sfdy = sfxx[finite],sfy[finite],sfdy[finite]
+        # 3) Construct bounds and make sure upper >= lower
+        lower = sfy - sfdy
+        upper = sfy + sfdy
+        swap = upper < lower
+        if np.any(swap):
+            tmp = lower[swap]
+            lower[swap] = upper[swap]
+            upper[swap] = tmp
+        xx = np.linspace(2.1,2.4,128)
+        yy = shockley(nfbeta,xx)
+        ax[0].errorbar(x=T[utilmask],xerr=dT[utilmask],y=U[utilmask],yerr=dU[utilmask])
+        ax[0].plot(sfxx,sfyy,zorder=3)
+        ax[0].fill_between(
+            sfxx, lower, upper,
+            alpha=0.25, lw=0, facecolor='tab:orange', zorder=2, label='1σ band (SF)'
+        )
+        ax[0].plot(xx,yy,zorder=3)
+        # 5) Make sure axes include the polygon
+        ax[0].relim()
+        ax[0].autoscale_view()
         ax[0].set_title(r'Superfuid Phase')
         ax[0].set_xlabel(r'Temperatur [K]')
         ax[0].set_ylabel(r'Spannung $U_\mathrm{AB}$')
-        ax[0].plot(sfxx,sfyy,zorder=3)
-        ax[0].plot(sfxx,sfcf,zorder=3)
 
-        nfxx = np.linspace(T_nf.min(),T_nf.max(),512)
-        nfyy = mdl_shockley(out_nf.beta,nfxx)
-        nfcf = mdl_shockley(cf_best_nf,nfxx)
-        ax[1].errorbar(x=T_nf,xerr=sT_nf,y=U_nf,yerr=sU_nf)
+        nfxx = np.linspace(T[nf_mask].min(),T[nf_mask].max(),512)
+        nfyy = shockley(nfbeta,nfxx)
+        xx2 = np.linspace(T[nf_mask].min(),2.4,128)
+        yy2 = shockley(sfbeta,xx2)
+        ax[1].errorbar(x=T[nf_mask],xerr=dT[nf_mask],y=U[nf_mask],yerr=dU[nf_mask])
+        ax[1].plot(nfxx,nfyy,zorder=3)
+        ax[1].plot(xx2,yy2,zorder=3)
         ax[1].set_title(r'Normalfluid Phase')
         ax[1].set_xlabel(r'Temperatur [K]')
         ax[1].set_ylabel(r'Spannung $U_\mathrm{AB}$')
-        ax[1].plot(nfxx,nfyy,zorder=3)
-        ax[1].plot(nfxx,nfcf,zorder=3)
 
         plt.show()
 
