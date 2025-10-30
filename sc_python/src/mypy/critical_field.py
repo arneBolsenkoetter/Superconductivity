@@ -359,7 +359,7 @@ fit_tops    = True
 fit_nether  = True
 
 test_mode           = True
-plot_temperatures   = True
+plot_temperatures   = False
 plot_intersec       = True
 
 
@@ -377,67 +377,68 @@ tab_bar['p_bar']*=1e-2
 
 it = mess.items()
 if test_mode:
-    it = islice(it, 12)  # set int to the number of items you want to iterate over when test_mode is activated
+    it = islice(it, 13)  # set int to the number of items you want to iterate over when test_mode is activated
 
 for i,(key,m) in enumerate(it):
     # -------------------- workflow to get temperatures -----------------------
     t=m.time[masks[i]]
-    x=m.u_ab[masks[i]]
-    xerr=m.u_ab_err[masks[i]]
+    up = m.u_p[masks[i]]
+    uperr = m.u_p_err[masks[i]]
+    uab=m.u_ab[masks[i]]
+    uaberr=m.u_ab_err[masks[i]]
 
-    from calibration import slope, slope_var, slope_err, offset, offset_var, offset_err , covar, varco
-    pressure,pressure_err = core.p_from_Up(
-        Up=y1,Up_err=y1err,
-        m=slope,dm=slope_err,b=offset,db=offset_err,covar=covar)
+    from calibration import odr_res
+    slope = odr_res['m'];   dslope = odr_res['cov'][0,0]
+    offset = odr_res['b'];  doffset = odr_res['cov'][1,1]
+    covar = odr_res['cov'][0,1]
+    papprox,dpapprox = calib.linear_p_from_Up(
+        m=slope,dm=dslope,b=offset,db=doffset,covar=covar,
+        Up=up,Up_err=uperr,
+    )
+    sfmask = (papprox<5.207*1e-2)
+    nfmask = (papprox>4.836*1e-2)
+    sfpapprox = papprox[sfmask]
+    nfpapprox = papprox[nfmask]
+    print(len(sfpapprox))
+    print(len(nfpapprox))
+    print(len(papprox))
 
-    T_tab=tab_bar['T_K']
-    p_tab=tab_bar['p_bar']
+    if len(sfpapprox)==len(papprox) and len(nfpapprox)==0:  print('Superfluid');    beta = calib.sfbeta;    cov = calib.sfcov
+    else:   print('Normalfluid');   beta = calib.nfbeta;    cov = calib.nfcov
 
-    from scipy.interpolate import PchipInterpolator
-    p_of_T  = PchipInterpolator(T_tab, p_tab)        # forward (smooth, monotone)
-    T_of_p  = PchipInterpolator(p_tab, T_tab)        # inverse
-    dpdT    = p_of_T.derivative()
-    dTdp    = T_of_p.derivative()                        # directly dT/dp (kPa⁻1)
+    T,dT = calib.inv_band_from_params_jax(beta,cov,uab,uaberr)
+    T = np.array(T)
+    dT = np.array(dT)
 
-    T_meas = calib.inv_band_from_params_jax()
-    Tpack = temperature_from_measurement(m)
-    T = Tpack['T'][masks[i]]
-    T_asym = np.vstack([Tpack['dT_minus'][masks[i]],Tpack['dT_plus'][masks[i]]])
-    Tilo = T - T_asym[0,:]; Tihi=T+T_asym[1,:]
-    Tilomin = Tilo.min();   Tihimax=Tihi.max()
-    Tmedian=np.median(T);   Tmean=np.mean(T)
-
-    T_lo=T_of_p(pressure-pressure_err);    T_hi=T_of_p(pressure+pressure_err)
-    T_err_asym=np.vstack([T_meas-T_lo, T_hi-T_meas])
-
-    meanT=np.mean(T_meas)
-    medianT=np.median(T_meas)
-    medianT_plus_sigma=T_hi.max()-medianT
-    medianT_minus_sigma=medianT-T_lo.min()
-    print(f'{key:>4}: Temp.Median:\t {medianT} (+{medianT_plus_sigma},-{medianT_minus_sigma})')
+    meanT=np.mean(T);   medianT=np.median(T)
+    idxmin = np.where(T==T.min());  idxmax = np.where(T==T.max())
+    Tilo = T[idxmin]-dT[idxmin];     Tihi = T[idxmax]+dT[idxmax]
 
     results[key]['temp'] = {
-        'med':  Tmedian,
-        'men':  Tmean,
-        'min':  Tilomin,
-        'max':  Tihimax,
+        'med':  medianT,
+        'men':  meanT,
+        'min':  Tilo,
+        'max':  Tihi,
+        'err':  [Tilo-medianT,Tihi-medianT]
     }
 
+    plot_temperatures = True
     if plot_temperatures and __name__=="__main__":
         fig1,ax1=plt.subplots(nrows=1,ncols=1,figsize=figrect())
         h1=ax1.errorbar(
-            x=x1,y=pressure,yerr=pressure_err,
-            label=f'{key} Vapor-pressure',
+            x=t,y=papprox,yerr=dpapprox,
+            label=r'Vapor-pressure, approximated with linear fitting of $U_P$',
             **cfg.err_kw(elw=0.1),
             fmt='x',ls='',mfc='cyan',mec='cyan',#zorder=5,
             )
         handles = [h1]
         for bar in h1[2]:
             bar.set_alpha(0.7)
+        ax1.set_title(key)
         ax1.set_ylabel(r'Pressure $P$ [bar]')
         ax1.set_xlabel(r"Time $t$ [s]")
 
-        tt=np.linspace(x1.min(),x1.max(),300)
+        tt=np.linspace(t.min(),t.max(),300)
 
         secax1=ax1.twinx()
         secax1.patch.set_alpha(0.0)
@@ -446,7 +447,7 @@ for i,(key,m) in enumerate(it):
         use_legacy_temp=False
         if use_legacy_temp:
             h2 = secax1.errorbar(
-                x=x1,y=T_meas,yerr=T_err_asym,
+                x=x1,y=T,yerr=T_err_asym,
                 label=r'ITS90-converted temperature',
                 **cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue'
                 )
@@ -457,10 +458,10 @@ for i,(key,m) in enumerate(it):
             # secax1.axhspan(medianT-medianT_minus_sigma, medianT+medianT_plus_sigma, alpha=0.3, lw=0.3)
             handles.append([h2,h3,h4])
         else:
-            h2=secax1.errorbar(x=x1,y=T,yerr=T_asym,label='Calibrated Temperature',**cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue')
-            h3=secax1.hlines(Tmedian,xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='k', label=r'Temperature Median')
-            h4=secax1.hlines(Tmean,xmin=x1.min()-(x1.max()-x1.min())/20, xmax=x1.max()+(x1.max()-x1.min())/20, color='orange', label=r'Temperature Mean')
-            secax1.fill_between(tt,Tilomin,Tihimax,alpha=0.3,lw=0.3,color='k')
+            h2=secax1.errorbar(x=t,y=T,yerr=dT,label='Calibrated Temperature',**cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue')
+            h3=secax1.hlines(medianT,xmin=t.min()-(t.max()-t.min())/20, xmax=t.max()+(t.max()-t.min())/20, color='k', label=r'Temperature Median')
+            h4=secax1.hlines(meanT,xmin=t.min()-(t.max()-t.min())/20, xmax=t.max()+(t.max()-t.min())/20, color='orange', label=r'Temperature Mean')
+            secax1.fill_between(tt,Tilo,Tihi,alpha=0.3,lw=0.3,color='k')
             handles.extend([h2,h3,h4])
         secax1.set_ylabel(r'Temperature $T$ [K]')
 
@@ -468,8 +469,7 @@ for i,(key,m) in enumerate(it):
         secax1.legend(handles,labels,loc='upper right',fontsize=6)
 
 
-
-    # ------------------- workflow to get critical field ----------------------
+    # ----------------------- workflow to get critical field ---------------------------
     get_critical=True
     if get_critical:
         x=m.u_spule[masks[i]]
