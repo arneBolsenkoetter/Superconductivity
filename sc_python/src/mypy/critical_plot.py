@@ -83,7 +83,7 @@ t952 = student_t.ppf(0.975, df=max(n2-p2, 1))
 Hc0_952 = (H0 - t952*sH0, H0 + t952*sH0)
 ci68_lo2, ci68_hi2 = ft2 - s_mean2, ft2 + s_mean2
 ci95_lo2, ci95_hi2 = ft2 - t952*s_mean2, ft2 + t952*s_mean2
-print(f"H_c(0) = {H0:.6g} ± {sH0:.2g} T  (1σ)")
+print(f"H_c(0) = {H0:.6g} ± {sH0:.2g} A/m  (1σ)")
 print(f"-T/T0  = {b:.6g} ± {sb:.2g}")
 print(f"95% CI: [{Hc0_952[0]:.6g}, {Hc0_952[1]:.6g}] T")
 # Optional: prediction band (mean band + residual variance in y-direction).
@@ -109,12 +109,13 @@ HTresv = HTout.res_var      # residual variance scale used internally
 
 HTcorr = HTcov / np.sqrt(np.outer(np.diag(HTcov), np.diag(HTcov)))
 print("\n--- Nonlinear ODR: H(T) = H0 * (1 - (T/Tc)^2) ---")
-print(f"H0  = {H0_hat:.5g} ± {sH0_hat:.2g} T   (1σ)")
-print(f"Tc  = {Tc_hat:.5g} ± {sTc_hat:.2g} K   (1σ)")
+print(f"H0  = {H0_hat:.5g} ± {sH0_hat:.2g} A/m  (1σ)")
+print(f"H_c(0) ≈ {H0_hat:.0f} A/m  →  B_c(0) = μ0 H_c(0) ≈ {cfg.mu0*H0_hat:.4f} T (~0.03 T expected for Sn)")
+print(f"Tc  = {Tc_hat:.5g} ± {sTc_hat:.2g} K    (1σ)")
 print("corr(H0,Tc) =", f"{HTcorr[0,1]:+.3f}")
 # 95% CI for parameters (rough t-approx, df = N-2)
 t95 = student_t.ppf(0.975, df=max(len(T)-2, 1))
-print(f"95% CI H0: [{H0_hat - t95*sH0_hat:.6g}, {H0_hat + t95*sH0_hat:.6g}] T")
+print(f"95% CI H0: [{H0_hat - t95*sH0_hat:.6g}, {H0_hat + t95*sH0_hat:.6g}] A/m")
 print(f"95% CI Tc: [{Tc_hat - t95*sTc_hat:.6g}, {Tc_hat + t95*sTc_hat:.6g}] K")
 # H_c(0) = 8706.66 ± 1.1e+02 T  (1σ)
 # -T/T0  = -615.792 ± 4.5
@@ -156,7 +157,7 @@ if __name__=="__main__":
         # If you also want the prediction band, uncomment:
         ax1.fill_between(tt2, pb95_lo2, pb95_hi2, alpha=0.12, label='95% prediction band')
         ax1.set_xlabel(r"Temperature squared $T^2\quad[\mathrm{K}^2]$")
-        ax1.set_ylabel(r"Critical Field $H_C\quad[\mathrm{T}]$")
+        ax1.set_ylabel(r"Critical field strength $H_c\,[\mathrm{A/m}]$")
         plt.show()
 
     fig,ax=plt.subplots(nrows=1,ncols=1,figsize=figrect())

@@ -29,7 +29,7 @@ L,Lerr=193.0e-3,3.0e-3
 # -------------------------------- functions ----------------------------------
 i, n, ro, ri, l = sp.symbols('i n ro ri l', real=True)
 a = l/2
-f = lambda x: x**2 + sp.sqrt(x**2 + a**2)
+f = lambda x: x + sp.sqrt(x**2 + a**2)
 
 Hsym        = sp.Rational(1,2) * n*i/(ro - ri) * sp.log(f(ro)/f(ri))
 dH_di_sp    = sp.diff(Hsym, i)
@@ -238,7 +238,7 @@ for i in range(3,15):
 
 
 # ----------------------- masks for different regions -------------------------
-temps = [
+temps   = [# regarding U_AB over the time this mask was set so, to exclude initial phases (time) it took the temperatue to settle to a roughly constant value 
     (mess['m3'].time>=250.0),
     (mess['m4'].time>=200.0),
     (mess['m5'].time>=150.0),
@@ -252,7 +252,7 @@ temps = [
     (mess['m13'].time>=50.0),
     (mess['m14'].time>=50.0),
 ]
-t0s = [
+t0s     = [# plotting U_spule over the time t gives you the starting value of t at which the sweep of U_Spule actually starts
     (mess['m3'].time>=194.0),
     (mess['m4'].time>=8.1),
     (mess['m5'].time>=69.8),
@@ -266,7 +266,7 @@ t0s = [
     (mess['m13'].time>=18.1),
     (mess['m14'].time>=18.7),
 ]
-grounds = [
+grounds = [# plotting the hysteresis (U_Spule,U_Probe) gives you a rough estimation to mask the grounds
     (mess['m3'].u_spule<=7.65e-6)&(mess['m3'].u_probe<=8.0e-5),
     (mess['m4'].u_spule<=7.91e-6)&(mess['m4'].u_probe<=8.0e-5),
     (mess['m5'].u_spule<=8.48e-6)&(mess['m5'].u_probe<=8.0e-5),
@@ -280,7 +280,7 @@ grounds = [
     (mess['m13'].u_spule<=14.374e-5)&(mess['m13'].u_probe<=7.969e-5),
     (mess['m14'].u_spule<=15.959e-5)&(mess['m14'].u_probe<=8.0e-5),
 ]
-tops = [
+tops    = [# plotting the hysteresis (U_Spule,U_Probe) gives you a rough estimation to mask the tops
     (mess['m3'].u_spule>=1.500e-5),
     (mess['m4'].u_spule>=1.345e-5),
     (mess['m5'].u_spule>=1.201e-5)  &(mess['m5'].u_probe>=16.750e-5),
@@ -294,7 +294,7 @@ tops = [
     (mess['m13'].u_spule>=15.000e-5)&(mess['m13'].u_probe>=16.881e-5),
     (mess['m14'].u_spule>=16.397e-5)&(mess['m14'].u_probe>=16.963e-5),
 ]
-nether = [
+nether  = [# plotting the hysteresis (U_Spule,U_Probe) gives you a rough estimation to mask the points belonging to the rising and falling flanks
     (mess['m3'].u_probe>=8.000e-5)  &(mess['m3'].u_probe<=16.828e-5),
     (mess['m4'].u_probe>=8.155e-5)  &(mess['m4'].u_probe<=16.858e-5),
     (mess['m5'].u_probe>=8.616e-5)  &(mess['m5'].u_probe<=16.746e-5),
@@ -308,7 +308,7 @@ nether = [
     (mess['m13'].u_probe>=8.000e-5) &(mess['m13'].u_probe<=16.522e-5),
     (mess['m14'].u_probe>=8.389e-5) &(mess['m14'].u_probe<=16.640e-5),
 ]
-nether2 = [
+nether2 = [# at some point (for us this was the ninth measurement) you'll observe a kink in the rising flank. nether2 masks those points in nether above said kink
     None,
     None,
     None,
@@ -322,7 +322,7 @@ nether2 = [
     (mess['m13'].u_probe>=14.000e-5)&(mess['m13'].u_probe<=16.522e-5),
     (mess['m14'].u_probe>=13.712e-5)&(mess['m14'].u_probe<=16.640e-5),
 ]
-rising = [
+rising  = [# as soon as it is possible to visually separate the rising and falling flanks. For those 'rising' introduces hard bound for U_Spule
     None, 
     None, 
     None,
@@ -338,41 +338,46 @@ rising = [
 ]
 
 
-# -------------------------------- set flags ----------------------------------
+# ------------------------------------ set flags ---------------------------------------
 use_temperature_masks=True
 if use_temperature_masks:
-    masks=temps
-    base_string='After temp approx\n constant (t>t_temp)'
-    base_name='_temps_masked'
+    masks       = temps
+    base_string = 'After temp approx\n constant (t>t_temp)'
+    base_name   = '_temps_masked'
 else:
-    masks=t0s
-    base_string='After sweep of U_spule\n started (t>t0)'
-    base_name='_t0s_masked'
+    masks       = t0s
+    base_string = 'After sweep of U_spule\n started (t>t0)'
+    base_name   = '_t0s_masked'
 
 
-include_grounds = True
-include_tops    = True
-include_nether = True
+include_grounds = True          # those data points making up the lower plateau
+include_tops    = True          # those points making up the upper plateau 
+include_nether  = True           # all points of the rising and falling slopes of the hysteresis
 
-fit_grounds = True
-fit_tops    = True
-fit_nether  = True
+fit_grounds = True              # set to True when fitting a linear model to the ground plateau
+fit_tops    = True              # set to True when fitting a linear model to the upper plateau
+fit_nether  = True              # set to True when fitting a linear model to the rising flank
 
-test_mode           = True
-plot_temperatures   = False
-plot_intersec       = True
+test_mode           = True      # when True -> suppresses saving of all plots;  RECOMMENDATION: Leave True until code works seemlessly
+                                # Furthermore, it lets you decide to test your masks on only a subset of all imported measurements
+plot_temperatures   = False     # True -> plots temperature T over time t for all Measurements
+plot_intersec       = True      # True -> plots hysteresis (U_probe over H(U_spule)) 
+                                # with 
+                                #   highlighted plateaus                if include_grounds/include_tops, 
+                                #   linear fits for different regions,  if fit_grounds/fit_tops/fit_nether,
 
 
-# ------------------------------ main workflow --------------------------------
-results = {k: {} for k in mess}
+# -------------------------------------------------------- main -------------------------------------------------------- 
+results = {k: {} for k in mess}     # initialising a dict to save the results into
 
 from core import load_its90_table_orig
 tab_pascal = load_its90_table_orig(MYPY/'ITS90.csv')
+# --- converting pressures from ITS90.csv, which were in kPa to bar: ---
 tab_bar=tab_pascal.copy()
 names=list(tab_bar.dtype.names)
-names[names.index('p_kPa')]='p_bar'
-tab_bar.dtype.names=tuple(names)
-tab_bar['p_bar']*=1e-2
+names[names.index('p_kPa')]='p_bar' # <- renaming the pressure field
+tab_bar.dtype.names=tuple(names)    # <- applying new field-name
+tab_bar['p_bar']*=1e-2              # <- transforming its units to bar
 
 
 it = mess.items()
@@ -380,57 +385,63 @@ if test_mode:
     it = islice(it, 13)  # set int to the number of items you want to iterate over when test_mode is activated
 
 for i,(key,m) in enumerate(it):
-    # -------------------- workflow to get temperatures -----------------------
-    t=m.time[masks[i]]
-    up = m.u_p[masks[i]]
-    uperr = m.u_p_err[masks[i]]
-    uab=m.u_ab[masks[i]]
-    uaberr=m.u_ab_err[masks[i]]
-
+    # ------------------------ workflow to get temperatures ----------------------------
+    # --- importing relevant data from corresponding 'Measurement'-class instance
+    t       = m.time[masks[i]]
+    up      = m.u_p[masks[i]]
+    uperr   = m.u_p_err[masks[i]]
+    uab     = m.u_ab[masks[i]]
+    uaberr  = m.u_ab_err[masks[i]]
+    # --- importing linear fit-parameters with errors of U_p over pressure p
     from calibration import odr_res
-    slope = odr_res['m'];   dslope = odr_res['cov'][0,0]
-    offset = odr_res['b'];  doffset = odr_res['cov'][1,1]
-    covar = odr_res['cov'][0,1]
+    slope   = odr_res['m'];     dslope  = odr_res['cov'][0,0]
+    offset  = odr_res['b'];     doffset = odr_res['cov'][1,1]
+    covar   = odr_res['cov'][0,1]
+    # --- approximation of pressures for this measurement ---
     papprox,dpapprox = calib.linear_p_from_Up(
-        m=slope,dm=dslope,b=offset,db=doffset,covar=covar,
-        Up=up,Up_err=uperr,
+        m=slope, dm=dslope, b=offset, db=doffset,
+        covar=covar,
+        Up=up, Up_err=uperr,
     )
+    # --- defining masks for super- (sf) and normal-fluid (nf) phases ---
     sfmask = (papprox<5.207*1e-2)
     nfmask = (papprox>4.836*1e-2)
+    # --- using sf-/nfmask to associate a phase to each data-point of the Measurement m
     sfpapprox = papprox[sfmask]
     nfpapprox = papprox[nfmask]
-    print(len(sfpapprox))
-    print(len(nfpapprox))
-    print(len(papprox))
-
-    if len(sfpapprox)==len(papprox) and len(nfpapprox)==0:  print('Superfluid');    beta = calib.sfbeta;    cov = calib.sfcov
-    else:   print('Normalfluid');   beta = calib.nfbeta;    cov = calib.nfcov
-
-    T,dT = calib.inv_band_from_params_jax(beta,cov,uab,uaberr)
-    T = np.array(T)
-    dT = np.array(dT)
-
-    meanT=np.mean(T);   medianT=np.median(T)
-    idxmin = np.where(T==T.min());  idxmax = np.where(T==T.max())
-    Tilo = T[idxmin]-dT[idxmin];     Tihi = T[idxmax]+dT[idxmax]
+    # --- whwther there are any measurements right on the phase-transition, i.e. with points in the superfluid phase as well as points in the normal-fluid phase ---
+    # print(len(sfpapprox))
+    # print(len(nfpapprox))
+    # print(len(papprox));    exit()
+    # --- checks showed that no measurement has points in the superfluid and points in the normal-fluid phases. Makes condition rather easy whether to calculate the temperature with super- or normal-fluid parameters ---
+    if len(sfpapprox)==len(papprox) and len(nfpapprox)==0:      print('Superfluid');    beta = calib.sfbeta;    cov = calib.sfcov   # apply superfluid parameters
+    else:                                                       print('Normalfluid');   beta = calib.nfbeta;    cov = calib.nfcov   # apply normalfluid parameters
+    # --- compute temperature T with inverse shockley-equation for all data points ---
+    T,dT =  calib.inv_band_from_params_jax(beta,cov,uab,uaberr)
+    T   =   np.array(T)
+    dT  =   np.array(dT)
+    # --- decide on scalar temperature for the Measurement m ---
+    meanT   = np.mean(T);               medianT = np.median(T)
+    idxmin  = np.where(T==T.min());     idxmax  = np.where(T==T.max())
+    Tilo    = T[idxmin]-dT[idxmin];     Tihi    = T[idxmax]+dT[idxmax]    
 
     results[key]['temp'] = {
         'med':  medianT,
         'men':  meanT,
         'min':  Tilo,
         'max':  Tihi,
-        'err':  [Tilo-medianT,Tihi-medianT]
+        'err':  [Tilo-medianT,Tihi-medianT]     # using the greatest error here
     }
 
     plot_temperatures = True
     if plot_temperatures and __name__=="__main__":
-        fig1,ax1=plt.subplots(nrows=1,ncols=1,figsize=figrect())
-        h1=ax1.errorbar(
-            x=t,y=papprox,yerr=dpapprox,
-            label=r'Vapor-pressure, approximated with linear fitting of $U_P$',
+        fig1,ax1 = plt.subplots(nrows=1, ncols=1, figsize=figrect())
+        h1 = ax1.errorbar(
+            x=t, y=papprox, yerr=dpapprox,
+            label=r'Vapour-pressure $p(U_p)$ (lin. approx.)',
             **cfg.err_kw(elw=0.1),
-            fmt='x',ls='',mfc='cyan',mec='cyan',#zorder=5,
-            )
+            fmt='x', ls='', mfc='cyan', mec='cyan', #zorder=5,
+        )
         handles = [h1]
         for bar in h1[2]:
             bar.set_alpha(0.7)
@@ -438,13 +449,13 @@ for i,(key,m) in enumerate(it):
         ax1.set_ylabel(r'Pressure $P$ [bar]')
         ax1.set_xlabel(r"Time $t$ [s]")
 
-        tt=np.linspace(t.min(),t.max(),300)
-
-        secax1=ax1.twinx()
+        tt = np.linspace(t.min(),t.max(),300)
+        # --- create secondary ax twinx -> sharing x axis ---
+        secax1 = ax1.twinx()
         secax1.patch.set_alpha(0.0)
         secax1.set_zorder(ax1.get_zorder())
         ax1.patch.set_alpha(0.0)
-        use_legacy_temp=False
+        use_legacy_temp = False
         if use_legacy_temp:
             h2 = secax1.errorbar(
                 x=x1,y=T,yerr=T_err_asym,
@@ -458,25 +469,39 @@ for i,(key,m) in enumerate(it):
             # secax1.axhspan(medianT-medianT_minus_sigma, medianT+medianT_plus_sigma, alpha=0.3, lw=0.3)
             handles.append([h2,h3,h4])
         else:
-            h2=secax1.errorbar(x=t,y=T,yerr=dT,label='Calibrated Temperature',**cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue')
-            h3=secax1.hlines(medianT,xmin=t.min()-(t.max()-t.min())/20, xmax=t.max()+(t.max()-t.min())/20, color='k', label=r'Temperature Median')
-            h4=secax1.hlines(meanT,xmin=t.min()-(t.max()-t.min())/20, xmax=t.max()+(t.max()-t.min())/20, color='orange', label=r'Temperature Mean')
-            secax1.fill_between(tt,Tilo,Tihi,alpha=0.3,lw=0.3,color='k')
-            handles.extend([h2,h3,h4])
+            h2 = secax1.errorbar(
+                x=t, y=T, yerr=dT,
+                label='Calibrated Temperature',
+                **cfg.err_kw(elw=0.2), fmt='+',ls='',mfc='blue',mec='blue',
+            )
+            h3 = secax1.hlines(
+                medianT, xmin=t.min()-(t.max()-t.min())/20, xmax=t.max()+(t.max()-t.min())/20,
+                color='k', label=r'Temperature Median',
+            )
+            h4 = secax1.hlines(
+                meanT, xmin=t.min()-(t.max()-t.min())/20, xmax=t.max()+(t.max()-t.min())/20,
+                color='orange', label=r'Temperature Mean',
+            )
+            h5 = secax1.fill_between(
+                tt, Tilo, Tihi,
+                alpha=0.3, lw=0.3, color='k',
+            )
+            handles.extend([h2,h3,h4])              # <- Use handles.extend here instead of handles.append to add h2, h3, h4 individually to handles. append() would add the entire list [h2,h3,h4] as one item to handles
         secax1.set_ylabel(r'Temperature $T$ [K]')
 
-        labels=[h.get_label() for h in handles]
-        secax1.legend(handles,labels,loc='upper right',fontsize=6)
+        labels = [h.get_label() for h in handles]
+        secax1.legend(handles,labels, loc='upper right', fontsize=6)
 
 
     # ----------------------- workflow to get critical field ---------------------------
     get_critical=True
     if get_critical:
+        # --- importing relevant data ---
         x=m.u_spule[masks[i]]
         x_err=m.u_spule_err[masks[i]]
         y=m.u_probe[masks[i]]
         y_err=m.u_probe_err[masks[i]]
-
+        # --- computing the field H(U_spule) ---
         I_arr=x/R
         I_err=x_err/R
         Hall=np.zeros_like(m.u_spule)
@@ -485,18 +510,17 @@ for i,(key,m) in enumerate(it):
         Hallerr[masks[i]]=Herr(I=I_arr,I_err=I_err)
         Harr=H(I_arr,N,Ro,Ri,L)
         Haerr=Herr(I=I_arr,I_err=I_err)
-
+        # --- masking the rising and falling flanks ---
         rose=np.r_[False,np.diff(m.u_spule)>0]
         rose=min_run(rose,3)                    # 'averages' over 3 consecutive points -> less prone to outliers
         fall=np.r_[False,np.diff(m.u_spule)<0]
         fall=min_run(fall,3)
-
+        # --- setting export string (for figure) ---
         if include_grounds or include_nether or include_tops:  _with='_with'
         else:                                                   _with=''
-
         if fit_grounds or fit_tops: fit_string='_fits';     xx=np.linspace(Harr.min(),Harr.max(),1000)
         else:                       fit_string=''
-
+        # --- applying masks ---
         maskg=masks[i]&grounds[i]
         xg=m.u_spule[maskg]
         Hg=Hall[maskg]
